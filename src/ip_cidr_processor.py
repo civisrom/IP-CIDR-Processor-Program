@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import ipaddress
+from ipaddress import ip_network, ip_address
 import json
 import requests
 import argparse
@@ -16,6 +17,8 @@ class IPCIDRProcessor:
     def __init__(self):
             self.ip_pattern_v4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b')
             self.ip_pattern_v6 = re.compile(r'(?:(?:[0-9a-fA-F]{1,4}:){0,7}(?::[0-9a-fA-F]{1,4}){0,7}|(?:[0-9a-fA-F]{1,4}:){0,6}:(?::[0-9a-fA-F]{1,4}){0,6})/\d{1,3}')
+            self.range_mask = "{start}-{end}"  # Маска по умолчанию для диапазонов
+            self.custom_range_pattern = None   # Пользовательский шаблон для диапазонов
             self.config_file = 'ip_cidr_config.yaml'
             self.output_folder = 'output'
             self.default_config = {
@@ -27,7 +30,6 @@ class IPCIDRProcessor:
                     {'name': 'surge', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n'},
                     {'name': 'shadowsocks', 'prefix': '', 'suffix': '@shadowsocks', 'separator': ' | '},
                     {'name': 'json', 'prefix': '{"ip": "', 'suffix': '"}', 'separator': ',\n'},
-                    {'name': 'range', 'prefix': '', 'suffix': '', 'separator': '\n'}  # Новая маска для диапазонов
                 ],
                 'default_mask': 'default'
             }
@@ -35,6 +37,66 @@ class IPCIDRProcessor:
             
             if not os.path.exists(self.output_folder):
                 os.makedirs(self.output_folder)
+
+    def cidr_to_range(self, cidr):
+        """Преобразование CIDR в диапазон IP-адресов"""
+        network = ipaddress.ip_network(cidr, strict=False)
+        first_ip = network.network_address
+        last_ip = network.broadcast_address
+        return (str(first_ip), str(last_ip))
+
+    def format_range(self, start_ip, end_ip, use_custom=False):
+        """Форматирование диапазона с учетом маски"""
+        if use_custom and self.custom_range_pattern:
+            return self.custom_range_pattern.format(start=start_ip, end=end_ip)
+        return self.range_mask.format(start=start_ip, end=end_ip)
+
+    def set_range_mask(self, mask):
+        """Установка маски для диапазонов"""
+        if "{start}" in mask and "{end}" in mask:
+            self.range_mask = mask
+            return True
+        return False
+
+    def set_custom_range_pattern(self, pattern):
+        """Установка пользовательского шаблона для диапазонов"""
+        if "{start}" in pattern and "{end}" in pattern:
+            self.custom_range_pattern = pattern
+            return True
+        return False
+
+    def process_file_to_range(self, file_path, include_ipv4=True, include_ipv6=True, use_custom_range=False):
+        """Обработка файла с выводом в виде диапазонов"""
+        ips_dict = self.process_file(file_path)
+        ranges = []
+        
+        if include_ipv4:
+            for cidr in ips_dict['ipv4']:
+                start, end = self.cidr_to_range(cidr)
+                ranges.append(self.format_range(start, end, use_custom_range))
+        
+        if include_ipv6:
+            for cidr in ips_dict['ipv6']:
+                start, end = self.cidr_to_range(cidr)
+                ranges.append(self.format_range(start, end, use_custom_range))
+        
+        return ranges
+
+    def save_results_as_ranges(self, file_path, output_file, include_ipv4=True, include_ipv6=True, use_custom_range=False):
+        """Сохранение результатов в виде диапазонов"""
+        ranges = self.process_file_to_range(file_path, include_ipv4, include_ipv6, use_custom_range)
+        if not ranges:
+            print("Нет диапазонов для сохранения")
+            return False
+        
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(ranges))
+            print(f"Диапазоны сохранены в файл: {output_file}")
+            return True
+        except Exception as e:
+            print(f"Ошибка при сохранении диапазонов: {e}")
+            return False
 
     def load_config(self):
         """Загрузка конфигурации из файла или создание конфигурации по умолчанию"""
@@ -60,17 +122,6 @@ class IPCIDRProcessor:
         except Exception as e:
             print(f"Ошибка при сохранении конфигурации: {e}")
             return False
-
-    def cidr_to_range(self, cidr):
-        """Преобразование CIDR в диапазон адресов"""
-        try:
-            network = ipaddress.ip_network(cidr, strict=False)
-            first_ip = network.network_address
-            last_ip = network.broadcast_address
-            return f"{first_ip}-{last_ip}"
-        except ValueError as e:
-            print(f"Ошибка при преобразовании CIDR в диапазон: {e}")
-            return cidr  # Возвращаем исходный CIDR в случае ошибки
 
     def validate_ip_cidr(self, ip_cidr):
         """Validate if a string is a valid IP CIDR notation"""
@@ -116,50 +167,26 @@ class IPCIDRProcessor:
             return {'ipv4': [], 'ipv6': []}
     
     def save_results_with_options(self, ips_dict, output_file, mask_name=None, include_ipv4=True, include_ipv6=True):
-        """Сохранение результатов с выбором IPv4/IPv6 и опциональной маской, включая комментарии и диапазоны"""
-        if not ips_dict or ('ipv4' not in ips_dict and 'ipv6' not in ips_dict):
+        """Сохранение результатов с выбором IPv4/IPv6 и опциональной маской"""
+        if not (ips_dict['ipv4'] or ips_dict['ipv6']):
             print("Нет IP-адресов для сохранения")
             return False
         
+        # Фильтруем по выбору IPv4/IPv6
         ips_to_save = []
-        if include_ipv4 and 'ipv4' in ips_dict:
-            for ip in ips_dict['ipv4']:
-                if isinstance(ip, tuple):  # Если включены комментарии
-                    ip_cidr, comment = ip
-                else:
-                    ip_cidr, comment = ip, ""
-                network = ipaddress.ip_network(ip_cidr, strict=False)
-                if network.version == 4:
-                    ips_to_save.append((ip_cidr, comment))
-        
-        if include_ipv6 and 'ipv6' in ips_dict:
-            for ip in ips_dict['ipv6']:
-                if isinstance(ip, tuple):  # Если включены комментарии
-                    ip_cidr, comment = ip
-                else:
-                    ip_cidr, comment = ip, ""
-                network = ipaddress.ip_network(ip_cidr, strict=False)
-                if network.version == 6:
-                    ips_to_save.append((ip_cidr, comment))
+        if include_ipv4:
+            ips_to_save.extend(ips_dict['ipv4'])
+        if include_ipv6:
+            ips_to_save.extend(ips_dict['ipv6'])
         
         if not ips_to_save:
             print("Нет выбранных IP-адресов для сохранения")
             return False
         
         if mask_name and mask_name != "none":
-            mask = next((m for m in self.config['masks'] if m['name'] == mask_name), None)
-            if not mask:
-                mask = next((m for m in self.config['masks'] if m['name'] == self.config['default_mask']), self.config['masks'][0])
-            
-            if mask['name'] == 'range':
-                # Преобразование CIDR в диапазон для маски range
-                formatted_ips = [f"{self.cidr_to_range(ip)} # {comment}" if comment else self.cidr_to_range(ip) for ip, comment in ips_to_save]
-            else:
-                # Обычная обработка для других масок
-                formatted_ips = [f"{mask['prefix']}{ip}{mask['suffix']} # {comment}" if comment else f"{mask['prefix']}{ip}{mask['suffix']}" for ip, comment in ips_to_save]
-            content = mask['separator'].join(formatted_ips)
+            content = self.apply_mask(ips_to_save, mask_name)
         else:
-            content = '\n'.join([f"{ip} # {comment}" if comment else ip for ip, comment in ips_to_save])
+            content = '\n'.join(ips_to_save)
         
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -334,7 +361,7 @@ class IPCIDRProcessor:
         return self.save_config(self.config)
 
     def get_masks(self):
-        """Получение списка имен масок"""
+        """Получение списка доступных масок"""
         return [mask['name'] for mask in self.config['masks']]
 
     def set_default_mask(self, mask_name):
@@ -459,7 +486,6 @@ class ConsoleUI:
         input("\nНажмите Enter для продолжения...")
     
     def process_local_files(self):
-        """Обработка локальных файлов"""
         self.print_header()
         print("Обработка локальных файлов:")
         print("Укажите пути к файлам через запятую или пробел.")
@@ -503,20 +529,20 @@ class ConsoleUI:
         
         print(f"Выбрана маска: {selected_mask}")
         
-        # Обработка каждого файла
-        all_ips = []
-        for path in valid_paths:
-            print(f"\nОбработка файла: {path}")
-            ips = self.processor.process_file(path)
-            if ips:
-                print(f"Найдено {len(ips)} IP-адресов в CIDR формате.")
-                all_ips.extend(ips)
-            else:
-                print("IP-адреса в CIDR формате не найдены.")
-        
-        # Удаляем дубликаты
-        all_ips = list(set(all_ips))
-        print(f"\nВсего уникальных IP-адресов: {len(all_ips)}")
+        # Дополнительные опции
+        print("\nДополнительные опции:")
+        include_ipv4 = input("Включать IPv4? (y/n, по умолчанию y): ").lower() != 'n'
+        include_ipv6 = input("Включать IPv6? (y/n, по умолчанию y): ").lower() != 'n'
+        use_ranges = input("Выводить как диапазоны? (y/n): ").lower() == 'y'
+        use_custom = False
+        if use_ranges:
+            use_custom = input("Использовать пользовательский шаблон? (y/n): ").lower() == 'y'
+            if use_custom:
+                pattern = input("Введите шаблон (например, {start}[custom]{end}): ")
+                if not self.processor.set_custom_range_pattern(pattern):
+                    print("Ошибка: шаблон должен содержать {start} и {end}")
+                    input("Нажмите Enter для продолжения...")
+                    return
         
         # Выбор способа сохранения
         print("\nВыберите способ сохранения:")
@@ -524,26 +550,74 @@ class ConsoleUI:
         print("2. Сохранить каждый исходный файл отдельно")
         save_choice = input("Выберите способ сохранения (1-2): ")
         
-        if save_choice == '1':
-            output_file = input("Введите имя выходного файла (по умолчанию: combined_ips.txt): ")
-            if not output_file.strip():
-                output_file = "combined_ips.txt"
-            output_path = os.path.join(self.processor.output_folder, output_file)
-            success = self.processor.save_results(all_ips, output_path, selected_mask)
-            if success:
-                print(f"Все IP-адреса сохранены в файл: {output_path}")
-        elif save_choice == '2':
+        if use_ranges:
+            all_ranges = []
             for path in valid_paths:
-                ips = self.processor.process_file(path)
-                if ips:
-                    base_name = os.path.basename(path)
-                    output_file = f"processed_{base_name}"
-                    output_path = os.path.join(self.processor.output_folder, output_file)
-                    success = self.processor.save_results(ips, output_path, selected_mask)
-                    if success:
-                        print(f"IP-адреса из {path} сохранены в файл: {output_path}")
+                print(f"\nОбработка файла: {path}")
+                ranges = self.processor.process_file_to_range(path, include_ipv4, include_ipv6, use_custom)
+                if ranges:
+                    print(f"Найдено диапазонов: {len(ranges)}")
+                    if save_choice == '2':
+                        output_path = os.path.join(self.processor.output_folder, f"range_{os.path.basename(path)}")
+                        try:
+                            with open(output_path, 'w', encoding='utf-8') as f:
+                                f.write('\n'.join(ranges))
+                            print(f"Диапазоны сохранены в: {output_path}")
+                        except Exception as e:
+                            print(f"Ошибка при сохранении: {e}")
+                    else:
+                        all_ranges.extend(ranges)
+                else:
+                    print("Диапазоны не найдены")
+            
+            if save_choice == '1' and all_ranges:
+                all_ranges = list(set(all_ranges))
+                print(f"\nВсего уникальных диапазонов: {len(all_ranges)}")
+                output_file = input("Введите имя выходного файла (по умолчанию: combined_ranges.txt): ")
+                if not output_file.strip():
+                    output_file = "combined_ranges.txt"
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(all_ranges))
+                    print(f"Все диапазоны сохранены в: {output_path}")
+                except Exception as e:
+                    print(f"Ошибка при сохранении: {e}")
         else:
-            print("Неверный выбор. Результаты не сохранены.")
+            # Существующая логика для CIDR
+            all_ips = []
+            for path in valid_paths:
+                print(f"\nОбработка файла: {path}")
+                ips = self.processor.process_file(path)
+                if ips['ipv4'] or ips['ipv6']:
+                    print(f"Найдено IPv4: {len(ips['ipv4'])}, IPv6: {len(ips['ipv6'])}")
+                    all_ips.extend(ips['ipv4'] + ips['ipv6'])
+                else:
+                    print("IP-адреса в CIDR формате не найдены")
+            
+            all_ips = list(set(all_ips))
+            print(f"\nВсего уникальных IP-адресов: {len(all_ips)}")
+            
+            if save_choice == '1':
+                output_file = input("Введите имя выходного файла (по умолчанию: combined_ips.txt): ")
+                if not output_file.strip():
+                    output_file = "combined_ips.txt"
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                success = self.processor.save_results(all_ips, output_path, selected_mask)
+                if success:
+                    print(f"Все IP-адреса сохранены в файл: {output_path}")
+            elif save_choice == '2':
+                for path in valid_paths:
+                    ips = self.processor.process_file(path)
+                    if ips['ipv4'] or ips['ipv6']:
+                        base_name = os.path.basename(path)
+                        output_file = f"processed_{base_name}"
+                        output_path = os.path.join(self.processor.output_folder, output_file)
+                        success = self.processor.save_results(ips['ipv4'] + ips['ipv6'], output_path, selected_mask)
+                        if success:
+                            print(f"IP-адреса из {path} сохранены в файл: {output_path}")
+            else:
+                print("Неверный выбор. Результаты не сохранены.")
         
         input("\nНажмите Enter для продолжения...")
     
@@ -834,18 +908,18 @@ class GUI:
         scrollbar = ttk.Scrollbar(frame_list)
         scrollbar.pack(side='right', fill='y')
         
-        self.listbox_local_files = tk.Listbox(frame_list, selectmode='multiple', yscrollcommand=scrollbar.set)
-        self.listbox_local_files.pack(side='left', fill='both', expand=True)
-        scrollbar.config(command=self.listbox_local_files.yview)
+        self.listbox_files = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
+        self.listbox_files.pack(side='left', fill='both', expand=True)
+        scrollbar.config(command=self.listbox_files.yview)
         
         frame_buttons = ttk.Frame(frame_files)
         frame_buttons.pack(fill='x', pady=5)
         
-        btn_add = ttk.Button(frame_buttons, text="Добавить файлы", command=self.add_local_files)
-        btn_add.pack(side='left', padx=5)
+        btn_add_files = ttk.Button(frame_buttons, text="Добавить файлы", command=self.add_local_files)
+        btn_add_files.pack(side='left', padx=5)
         
-        btn_remove = ttk.Button(frame_buttons, text="Удалить выбранные", command=self.remove_local_files)
-        btn_remove.pack(side='left', padx=5)
+        btn_clear_files = ttk.Button(frame_buttons, text="Очистить список", command=self.clear_local_files)
+        btn_clear_files.pack(side='left', padx=5)
         
         frame_settings = ttk.LabelFrame(self.tab_local, text="Настройки обработки")
         frame_settings.pack(fill='x', padx=10, pady=5)
@@ -859,6 +933,7 @@ class GUI:
         self.combo_local_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_local_mask.set(self.processor.config['default_mask'])
         
+        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -873,12 +948,12 @@ class GUI:
         
         ttk.Label(frame_save, text="Сохранение:").pack(side='left', padx=5)
         
-        self.var_save_mode = tk.StringVar(value="separate")
-        rb_separate = ttk.Radiobutton(frame_save, text="Отдельными файлами", variable=self.var_save_mode, value="separate")
-        rb_separate.pack(side='left', padx=5)
-        
+        self.var_save_mode = tk.StringVar(value="combined")
         rb_combined = ttk.Radiobutton(frame_save, text="В один файл", variable=self.var_save_mode, value="combined")
         rb_combined.pack(side='left', padx=5)
+        
+        rb_separate = ttk.Radiobutton(frame_save, text="Отдельными файлами", variable=self.var_save_mode, value="separate")
+        rb_separate.pack(side='left', padx=5)
         
         frame_output = ttk.Frame(frame_settings)
         frame_output.pack(fill='x', padx=5, pady=5)
@@ -902,7 +977,22 @@ class GUI:
         self.text_local_log.pack(side='left', fill='both', expand=True)
         scrollbar_log.config(command=self.text_local_log.yview)
     
+        # Добавляем опции для диапазонов
+        frame_range = ttk.Frame(frame_settings)
+        frame_range.pack(fill='x', padx=5, pady=5)
+        
+        self.var_use_ranges = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_range, text="Выводить как диапазоны", variable=self.var_use_ranges).pack(side='left', padx=5)
+        
+        self.var_use_custom_range = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_range, text="Использовать пользовательский шаблон", variable=self.var_use_custom_range).pack(side='left', padx=5)
+        
+        self.entry_range_pattern = ttk.Entry(frame_range)
+        self.entry_range_pattern.pack(side='left', fill='x', expand=True, padx=5)
+        self.entry_range_pattern.insert(0, "{start}-{end}")
+
     def setup_url_tab(self):
+        """Настройка вкладки для обработки файлов по URL"""
         frame_urls = ttk.LabelFrame(self.tab_url, text="Ввод URL")
         frame_urls.pack(fill='both', expand=True, padx=10, pady=5)
         
@@ -946,6 +1036,7 @@ class GUI:
         self.combo_url_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_url_mask.set(self.processor.config['default_mask'])
         
+        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -989,6 +1080,19 @@ class GUI:
         self.text_url_log.pack(side='left', fill='both', expand=True)
         scrollbar_log.config(command=self.text_url_log.yview)
     
+        frame_range = ttk.Frame(frame_settings)
+        frame_range.pack(fill='x', padx=5, pady=5)
+        
+        self.var_url_use_ranges = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_range, text="Выводить как диапазоны", variable=self.var_url_use_ranges).pack(side='left', padx=5)
+        
+        self.var_url_use_custom_range = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_range, text="Использовать пользовательский шаблон", variable=self.var_url_use_custom_range).pack(side='left', padx=5)
+        
+        self.entry_url_range_pattern = ttk.Entry(frame_range)
+        self.entry_url_range_pattern.pack(side='left', fill='x', expand=True, padx=5)
+        self.entry_url_range_pattern.insert(0, "{start}-{end}")
+
     def setup_merge_tab(self):
         frame_files = ttk.LabelFrame(self.tab_merge, text="Выбор файлов для объединения")
         frame_files.pack(fill='both', expand=True, padx=10, pady=5)
@@ -999,18 +1103,18 @@ class GUI:
         scrollbar = ttk.Scrollbar(frame_list)
         scrollbar.pack(side='right', fill='y')
         
-        self.listbox_merge_files = tk.Listbox(frame_list, selectmode='multiple', yscrollcommand=scrollbar.set)
+        self.listbox_merge_files = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
         self.listbox_merge_files.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.listbox_merge_files.yview)
         
         frame_buttons = ttk.Frame(frame_files)
         frame_buttons.pack(fill='x', pady=5)
         
-        btn_add = ttk.Button(frame_buttons, text="Добавить файлы", command=self.add_merge_files)
-        btn_add.pack(side='left', padx=5)
+        btn_add_files = ttk.Button(frame_buttons, text="Добавить файлы", command=self.add_merge_files)
+        btn_add_files.pack(side='left', padx=5)
         
-        btn_remove = ttk.Button(frame_buttons, text="Удалить выбранные", command=self.remove_merge_files)
-        btn_remove.pack(side='left', padx=5)
+        btn_clear_files = ttk.Button(frame_buttons, text="Очистить список", command=self.clear_merge_files)
+        btn_clear_files.pack(side='left', padx=5)
         
         frame_settings = ttk.LabelFrame(self.tab_merge, text="Настройки объединения")
         frame_settings.pack(fill='x', padx=10, pady=5)
@@ -1020,10 +1124,12 @@ class GUI:
         
         ttk.Label(frame_mask, text="Маска:").pack(side='left', padx=5)
         
-        self.combo_merge_mask = ttk.Combobox(frame_mask, values=self.processor.get_masks(), state="readonly")
+        masks = ["none"] + self.processor.get_masks()  # Добавляем опцию "без маски"
+        self.combo_merge_mask = ttk.Combobox(frame_mask, values=masks, state="readonly")
         self.combo_merge_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_merge_mask.set(self.processor.config['default_mask'])
         
+        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -1045,7 +1151,7 @@ class GUI:
         btn_merge = ttk.Button(self.tab_merge, text="Объединить файлы", command=self.merge_selected_files)
         btn_merge.pack(pady=10)
         
-        frame_log = ttk.LabelFrame(self.tab_merge, text="Лог объединения")
+        frame_log = ttk.LabelFrame(self.tab_merge, text="Лог обработки")
         frame_log.pack(fill='both', expand=True, padx=10, pady=5)
         
         scrollbar_log = ttk.Scrollbar(frame_log)
@@ -1055,6 +1161,19 @@ class GUI:
         self.text_merge_log.pack(side='left', fill='both', expand=True)
         scrollbar_log.config(command=self.text_merge_log.yview)
     
+        frame_range = ttk.Frame(frame_settings)
+        frame_range.pack(fill='x', padx=5, pady=5)
+        
+        self.var_merge_use_ranges = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_range, text="Выводить как диапазоны", variable=self.var_merge_use_ranges).pack(side='left', padx=5)
+        
+        self.var_merge_use_custom_range = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_range, text="Использовать пользовательский шаблон", variable=self.var_merge_use_custom_range).pack(side='left', padx=5)
+        
+        self.entry_merge_range_pattern = ttk.Entry(frame_range)
+        self.entry_merge_range_pattern.pack(side='left', fill='x', expand=True, padx=5)
+        self.entry_merge_range_pattern.insert(0, "{start}-{end}")
+
     def setup_settings_tab(self):
         frame_masks = ttk.LabelFrame(self.tab_settings, text="Доступные маски")
         frame_masks.pack(fill='both', expand=True, padx=10, pady=5)
@@ -1157,6 +1276,26 @@ class GUI:
         btn_clear_fields = ttk.Button(frame_mask_buttons, text="Очистить поля", command=self.clear_mask_fields)
         btn_clear_fields.pack(side='left', padx=5)
 
+        frame_range_settings = ttk.LabelFrame(self.tab_settings, text="Настройки диапазонов")
+        frame_range_settings.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(frame_range_settings, text="Маска диапазона:").pack(side='left', padx=5)
+        self.entry_range_mask = ttk.Entry(frame_range_settings)
+        self.entry_range_mask.pack(side='left', fill='x', expand=True, padx=5)
+        self.entry_range_mask.insert(0, self.processor.range_mask)
+        
+        ttk.Label(frame_range_settings, text="Пример: 192.168.1.0-192.168.1.255").pack(side='left', padx=5)
+        
+        btn_save_range_mask = ttk.Button(frame_range_settings, text="Сохранить", command=self.save_range_mask)
+        btn_save_range_mask.pack(side='left', padx=5)
+
+    def save_range_mask(self):
+            mask = self.entry_range_mask.get()
+            if self.processor.set_range_mask(mask):
+                messagebox.showinfo("Успех", "Маска диапазона сохранена")
+            else:
+                messagebox.showerror("Ошибка", "Маска должна содержать {start} и {end}")
+
     def update_example(self, event=None):
         prefix = self.entry_mask_prefix.get()
         suffix = self.entry_mask_suffix.get()
@@ -1211,40 +1350,80 @@ class GUI:
         include_ipv4 = self.var_ipv4.get()
         include_ipv6 = self.var_ipv6.get()
         
+        use_ranges = self.var_use_ranges.get()
+        use_custom_range = self.var_use_custom_range.get()
+        range_pattern = self.entry_range_pattern.get()
+        
         if not output_file:
             output_file = "combined_ips.txt"
         
-        all_ips = {'ipv4': [], 'ipv6': []}
-        for file_path in self.selected_files:
-            self.log_local(f"Обработка файла: {file_path}")
-            ips_dict = self.processor.process_file(file_path)
-            if ips_dict['ipv4'] or ips_dict['ipv6']:
-                self.log_local(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
-                all_ips['ipv4'].extend(ips_dict['ipv4'])
-                all_ips['ipv6'].extend(ips_dict['ipv6'])
-                
-                if save_mode == "separate":
-                    base_name = os.path.basename(file_path)
-                    output_path = os.path.join(self.processor.output_folder, f"processed_{base_name}")
-                    success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
-                    if success:
-                        self.log_local(f"Результаты сохранены в файл: {output_path}")
+        if use_custom_range:
+            if not self.processor.set_custom_range_pattern(range_pattern):
+                self.log_local("Ошибка: пользовательский шаблон диапазона должен содержать {start} и {end}")
+                return
+        
+        if use_ranges:
+            all_ranges = []
+            for file_path in self.selected_files:
+                self.log_local(f"Обработка файла: {file_path}")
+                ranges = self.processor.process_file_to_range(file_path, include_ipv4, include_ipv6, use_custom_range)
+                if ranges:
+                    self.log_local(f"Найдено диапазонов: {len(ranges)}")
+                    if save_mode == "separate":
+                        output_path = os.path.join(self.processor.output_folder, f"range_{os.path.basename(file_path)}")
+                        success = self.processor.save_results_as_ranges(file_path, output_path, include_ipv4, include_ipv6, use_custom_range)
+                        if success:
+                            self.log_local(f"Диапазоны сохранены в файл: {output_path}")
+                        else:
+                            self.log_local(f"Ошибка при сохранении в файл: {output_path}")
                     else:
-                        self.log_local(f"Ошибка при сохранении в файл: {output_path}")
-            else:
-                self.log_local(f"IP-адреса в CIDR формате не найдены")
-        
-        all_ips['ipv4'] = list(set(all_ips['ipv4']))
-        all_ips['ipv6'] = list(set(all_ips['ipv6']))
-        self.log_local(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
-        
-        if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
-            output_path = os.path.join(self.processor.output_folder, output_file)
-            success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
-            if success:
-                self.log_local(f"Все IP-адреса сохранены в файл: {output_path}")
-            else:
-                self.log_local(f"Ошибка при сохранении в файл: {output_path}")
+                        all_ranges.extend(ranges)
+                else:
+                    self.log_local("Диапазоны не найдены")
+            
+            if save_mode == "combined" and all_ranges:
+                all_ranges = list(set(all_ranges))  # Удаляем дубликаты
+                self.log_local(f"Всего уникальных диапазонов: {len(all_ranges)}")
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(all_ranges))
+                    self.log_local(f"Все диапазоны сохранены в файл: {output_path}")
+                except Exception as e:
+                    self.log_local(f"Ошибка при сохранении: {e}")
+        else:
+            # Существующая логика для CIDR
+            all_ips = {'ipv4': [], 'ipv6': []}
+            for file_path in self.selected_files:
+                self.log_local(f"Обработка файла: {file_path}")
+                ips_dict = self.processor.process_file(file_path)
+                if ips_dict['ipv4'] or ips_dict['ipv6']:
+                    self.log_local(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
+                    all_ips['ipv4'].extend(ips_dict['ipv4'])
+                    all_ips['ipv6'].extend(ips_dict['ipv6'])
+                    
+                    if save_mode == "separate":
+                        base_name = os.path.basename(file_path)
+                        output_path = os.path.join(self.processor.output_folder, f"processed_{base_name}")
+                        success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
+                        if success:
+                            self.log_local(f"Результаты сохранены в файл: {output_path}")
+                        else:
+                            self.log_local(f"Ошибка при сохранении в файл: {output_path}")
+                else:
+                    self.log_local("IP-адреса в CIDR формате не найдены")
+            
+            all_ips['ipv4'] = list(set(all_ips['ipv4']))
+            all_ips['ipv6'] = list(set(all_ips['ipv6']))
+            self.log_local(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
+            
+            if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
+                if success:
+                    self.log_local(f"Все IP-адреса сохранены в файл: {output_path}")
+                else:
+                    self.log_local(f"Ошибка при сохранении в файл: {output_path}")
         
         self.log_local("\nОбработка завершена")
     
@@ -1290,60 +1469,104 @@ class GUI:
         include_ipv4 = self.var_url_ipv4.get()
         include_ipv6 = self.var_url_ipv6.get()
         
+        use_ranges = self.var_url_use_ranges.get()
+        use_custom_range = self.var_url_use_custom_range.get()
+        range_pattern = self.entry_url_range_pattern.get()
+        
         if not output_file:
             output_file = "combined_urls.txt"
         
-        all_ips = {'ipv4': [], 'ipv6': []}
-        for url in self.selected_urls:
-            self.log_url(f"Загрузка файла по URL: {url}")
-            content = self.processor.download_file(url)
-            if content:
-                ips = self.processor.extract_ips(content)
-                ips_dict = {'ipv4': [], 'ipv6': []}
-                for ip in ips:
-                    if isinstance(ip, tuple):  # Если включены комментарии
-                        ip_cidr = ip[0]
-                    else:
-                        ip_cidr = ip
-                    network = ipaddress.ip_network(ip_cidr, strict=False)
-                    if network.version == 4:
-                        ips_dict['ipv4'].append(ip)
-                    elif network.version == 6:
-                        ips_dict['ipv6'].append(ip)
-                
-                if ips_dict['ipv4'] or ips_dict['ipv6']:
-                    self.log_url(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
-                    all_ips['ipv4'].extend(ips_dict['ipv4'])
-                    all_ips['ipv6'].extend(ips_dict['ipv6'])
-                    
-                    if save_mode == "separate":
-                        url_parts = urlparse(url)
-                        file_name = os.path.basename(url_parts.path)
-                        if not file_name:
-                            file_name = url_parts.netloc.replace('.', '_') + ".txt"
-                        
-                        output_path = os.path.join(self.processor.output_folder, f"url_{file_name}")
-                        success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
-                        if success:
-                            self.log_url(f"Результаты сохранены в файл: {output_path}")
+        if use_custom_range:
+            if not self.processor.set_custom_range_pattern(range_pattern):
+                self.log_url("Ошибка: пользовательский шаблон диапазона должен содержать {start} и {end}")
+                return
+        
+        if use_ranges:
+            all_ranges = []
+            for url in self.selected_urls:
+                self.log_url(f"Загрузка файла по URL: {url}")
+                content = self.processor.download_file(url)
+                if content:
+                    ips = self.processor.extract_ips(content)
+                    ranges = []
+                    for ip in ips:
+                        start, end = self.processor.cidr_to_range(ip)
+                        ranges.append(self.processor.format_range(start, end, use_custom_range))
+                    if ranges:
+                        self.log_url(f"Найдено {len(ranges)} диапазонов")
+                        if save_mode == "separate":
+                            url_parts = urlparse(url)
+                            file_name = os.path.basename(url_parts.path) or url_parts.netloc.replace('.', '_') + ".txt"
+                            output_path = os.path.join(self.processor.output_folder, f"range_url_{file_name}")
+                            try:
+                                with open(output_path, 'w', encoding='utf-8') as f:
+                                    f.write('\n'.join(ranges))
+                                self.log_url(f"Диапазоны сохранены в файл: {output_path}")
+                            except Exception as e:
+                                self.log_url(f"Ошибка при сохранении: {e}")
                         else:
-                            self.log_url(f"Ошибка при сохранении в файл: {output_path}")
+                            all_ranges.extend(ranges)
+                    else:
+                        self.log_url("Диапазоны не найдены")
                 else:
-                    self.log_url(f"IP-адреса в CIDR формате не найдены")
-            else:
-                self.log_url(f"Ошибка при загрузке файла")
-        
-        all_ips['ipv4'] = list(set(all_ips['ipv4']))
-        all_ips['ipv6'] = list(set(all_ips['ipv6']))
-        self.log_url(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
-        
-        if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
-            output_path = os.path.join(self.processor.output_folder, output_file)
-            success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
-            if success:
-                self.log_url(f"Все IP-адреса сохранены в файл: {output_path}")
-            else:
-                self.log_url(f"Ошибка при сохранении в файл: {output_path}")
+                    self.log_url("Ошибка при загрузке файла")
+            
+            if save_mode == "combined" and all_ranges:
+                all_ranges = list(set(all_ranges))
+                self.log_url(f"Всего уникальных диапазонов: {len(all_ranges)}")
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(all_ranges))
+                    self.log_url(f"Все диапазоны сохранены в файл: {output_path}")
+                except Exception as e:
+                    self.log_url(f"Ошибка при сохранении: {e}")
+        else:
+            # Существующая логика для CIDR
+            all_ips = {'ipv4': [], 'ipv6': []}
+            for url in self.selected_urls:
+                self.log_url(f"Загрузка файла по URL: {url}")
+                content = self.processor.download_file(url)
+                if content:
+                    ips = self.processor.extract_ips(content)
+                    ips_dict = {'ipv4': [], 'ipv6': []}
+                    for ip in ips:
+                        network = ipaddress.ip_network(ip, strict=False)
+                        if network.version == 4:
+                            ips_dict['ipv4'].append(ip)
+                        elif network.version == 6:
+                            ips_dict['ipv6'].append(ip)
+                    
+                    if ips_dict['ipv4'] or ips_dict['ipv6']:
+                        self.log_url(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
+                        all_ips['ipv4'].extend(ips_dict['ipv4'])
+                        all_ips['ipv6'].extend(ips_dict['ipv6'])
+                        
+                        if save_mode == "separate":
+                            url_parts = urlparse(url)
+                            file_name = os.path.basename(url_parts.path) or url_parts.netloc.replace('.', '_') + ".txt"
+                            output_path = os.path.join(self.processor.output_folder, f"url_{file_name}")
+                            success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
+                            if success:
+                                self.log_url(f"Результаты сохранены в файл: {output_path}")
+                            else:
+                                self.log_url(f"Ошибка при сохранении в файл: {output_path}")
+                    else:
+                        self.log_url("IP-адреса в CIDR формате не найдены")
+                else:
+                    self.log_url("Ошибка при загрузке файла")
+            
+            all_ips['ipv4'] = list(set(all_ips['ipv4']))
+            all_ips['ipv6'] = list(set(all_ips['ipv6']))
+            self.log_url(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
+            
+            if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
+                if success:
+                    self.log_url(f"Все IP-адреса сохранены в файл: {output_path}")
+                else:
+                    self.log_url(f"Ошибка при сохранении в файл: {output_path}")
         
         self.log_url("\nОбработка завершена")
     
@@ -1378,28 +1601,54 @@ class GUI:
         include_ipv4 = self.var_merge_ipv4.get()
         include_ipv6 = self.var_merge_ipv6.get()
         
+        use_ranges = self.var_merge_use_ranges.get()
+        use_custom_range = self.var_merge_use_custom_range.get()
+        range_pattern = self.entry_merge_range_pattern.get()
+        
         if not output_file:
             output_file = "merged_ips.txt"
         
+        if use_custom_range:
+            if not self.processor.set_custom_range_pattern(range_pattern):
+                self.log_merge("Ошибка: пользовательский шаблон диапазона должен содержать {start} и {end}")
+                return
+        
         output_path = os.path.join(self.processor.output_folder, output_file)
         
-        self.log_merge(f"Объединение {len(files)} файлов...")
-        
-        all_ips = {'ipv4': [], 'ipv6': []}
-        for file_path in files:
-            ips_dict = self.processor.process_file(file_path)
-            all_ips['ipv4'].extend(ips_dict['ipv4'])
-            all_ips['ipv6'].extend(ips_dict['ipv6'])
-        
-        all_ips['ipv4'] = list(set(all_ips['ipv4']))
-        all_ips['ipv6'] = list(set(all_ips['ipv6']))
-        self.log_merge(f"Найдено уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
-        
-        success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
-        if success:
-            self.log_merge(f"Файлы успешно объединены и сохранены в: {output_path}")
+        if use_ranges:
+            all_ranges = []
+            self.log_merge(f"Объединение {len(files)} файлов...")
+            for file_path in files:
+                ranges = self.processor.process_file_to_range(file_path, include_ipv4, include_ipv6, use_custom_range)
+                all_ranges.extend(ranges)
+            
+            all_ranges = list(set(all_ranges))
+            self.log_merge(f"Найдено уникальных диапазонов: {len(all_ranges)}")
+            
+            try:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(all_ranges))
+                self.log_merge(f"Диапазоны успешно объединены и сохранены в: {output_path}")
+            except Exception as e:
+                self.log_merge(f"Ошибка при сохранении: {e}")
         else:
-            self.log_merge("Ошибка при объединении файлов")
+            # Существующая логика для CIDR
+            self.log_merge(f"Объединение {len(files)} файлов...")
+            all_ips = {'ipv4': [], 'ipv6': []}
+            for file_path in files:
+                ips_dict = self.processor.process_file(file_path)
+                all_ips['ipv4'].extend(ips_dict['ipv4'])
+                all_ips['ipv6'].extend(ips_dict['ipv6'])
+            
+            all_ips['ipv4'] = list(set(all_ips['ipv4']))
+            all_ips['ipv6'] = list(set(all_ips['ipv6']))
+            self.log_merge(f"Найдено уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
+            
+            success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
+            if success:
+                self.log_merge(f"Файлы успешно объединены и сохранены в: {output_path}")
+            else:
+                self.log_merge("Ошибка при объединении файлов")
         
         self.log_merge("\nОбъединение завершено")
     
