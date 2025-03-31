@@ -1112,7 +1112,6 @@ class GUI:
         self.label_example2 = ttk.Label(frame_examples, text="", wraplength=700)
         self.label_example2.pack(side='top', fill='x', padx=5)
         
-        # Исправляем привязку с update_examples на update_example
         self.entry_mask_prefix.bind("<KeyRelease>", self.update_example)
         self.entry_mask_suffix.bind("<KeyRelease>", self.update_example)
         self.entry_separator.bind("<KeyRelease>", self.update_example)
@@ -1443,7 +1442,7 @@ class GUI:
             self.entry_separator.delete(0, tk.END)
             self.entry_separator.insert(0, mask['separator'])
         
-        self.update_example()  # Вызываем правильный метод
+        self.update_example()  # Вызываем исправленный метод
     
     def set_default_mask(self):
         """Установка выбранной маски по умолчанию"""
@@ -1462,12 +1461,26 @@ class GUI:
             messagebox.showerror("Ошибка", "Не удалось установить маску по умолчанию")
     
     def update_example(self, event=None):
-        """Обновление примера маски"""
         prefix = self.entry_mask_prefix.get()
         suffix = self.entry_mask_suffix.get()
-        example_ip = "192.168.1.0/24"
         
-        self.label_example.config(text=f"{prefix}{example_ip}{suffix}")
+        separator_type = self.var_separator.get()
+        separators = {
+            "newline": "\n",
+            "comma": ", ",
+            "semicolon": ";",
+            "pipe": "|",
+            "tab": "\t",
+            "custom": self.entry_separator.get()
+        }
+        separator = separators.get(separator_type, "\n")
+        separator_display = separator.replace('\n', '\\n')
+        
+        example_ip1 = "192.168.1.0/24"
+        example_ip2 = "2001:db8::/32"
+        
+        self.label_example1.config(text=f"IPv4: {prefix}{example_ip1}{suffix}")
+        self.label_example2.config(text=f"IPv6: {prefix}{example_ip2}{suffix} (разделитель: '{separator_display}' между записями)")
     
     def add_mask(self):
         name = self.entry_mask_name.get().strip()
