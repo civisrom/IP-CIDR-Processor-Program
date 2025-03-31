@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import ipaddress
+import json
 import requests
 import argparse
 from urllib.parse import urlparse
@@ -13,23 +14,26 @@ import platform
 
 class IPCIDRProcessor:
     def __init__(self):
-        self.ip_pattern_v4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b')
-        self.ip_pattern_v6 = re.compile(r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}/\d{1,3}\b|(?:[0-9a-fA-F]{1,4}:){0,7}[0-9a-fA-F]{1,4}/\d{1,3}\b')
-        self.config_file = 'ip_cidr_config.yaml'
-        self.output_folder = 'output'
-        self.default_config = {
-            'masks': [
-                {'name': 'default', 'prefix': '', 'suffix': '', 'separator': '\n'},
-                {'name': 'clash', 'prefix': 'IP-CIDR,', 'suffix': ',no-resolve', 'separator': '\n'},
-                {'name': 'custom', 'prefix': '[', 'suffix': ']', 'separator': ', '}
-            ],
-            'default_mask': 'default'
-        }
-        self.config = self.load_config()
-        
-        # Создаем папку для выходных файлов, если она не существует
-        if not os.path.exists(self.output_folder):
-            os.makedirs(self.output_folder)
+            self.ip_pattern_v4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b')
+            self.ip_pattern_v6 = re.compile(r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}/\d{1,3}\b|(?:[0-9a-fA-F]{1,4}:){0,7}[0-9a-fA-F]{1,4}/\d{1,3}\b')
+            self.config_file = 'ip_cidr_config.yaml'
+            self.output_folder = 'output'
+            self.default_config = {
+                'masks': [
+                    {'name': 'default', 'prefix': '', 'suffix': '', 'separator': '\n'},
+                    {'name': 'clash', 'prefix': 'IP-CIDR,', 'suffix': ',no-resolve', 'separator': '\n'},
+                    {'name': 'custom', 'prefix': '[', 'suffix': ']', 'separator': ', '},
+                    {'name': 'v2ray', 'prefix': 'ip-cidr:', 'suffix': '', 'separator': ';'},
+                    {'name': 'surge', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n'},
+                    {'name': 'shadowsocks', 'prefix': '', 'suffix': '@shadowsocks', 'separator': ' | '},
+                    {'name': 'json', 'prefix': '{"ip": "', 'suffix': '"}', 'separator': ',\n'},
+                ],
+                'default_mask': 'default'
+            }
+            self.config = self.load_config()
+            
+            if not os.path.exists(self.output_folder):
+                os.makedirs(self.output_folder)
 
     def load_config(self):
         """Загрузка конфигурации из файла или создание конфигурации по умолчанию"""
@@ -82,23 +86,56 @@ class IPCIDRProcessor:
     def process_file(self, file_path):
         """Process file and extract IP addresses"""
         try:
-            # Check if file exists
             if not os.path.exists(file_path):
                 print(f"Файл не найден: {file_path}")
-                return []
+                return {'ipv4': [], 'ipv6': []}
                 
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
             ips = self.extract_ips(content)
-            
-            # Sort IPs for consistent output
             sorted_ips = self.sort_ip_addresses(ips)
-            return sorted_ips
+            
+            # Разделяем на IPv4 и IPv6
+            ipv4_list = [ip for ip in sorted_ips if ipaddress.ip_network(ip, strict=False).version == 4]
+            ipv6_list = [ip for ip in sorted_ips if ipaddress.ip_network(ip, strict=False).version == 6]
+            
+            return {'ipv4': ipv4_list, 'ipv6': ipv6_list}
         except Exception as e:
             print(f"Ошибка при обработке файла {file_path}: {e}")
-            return []
+            return {'ipv4': [], 'ipv6': []}
     
+    def save_results_with_options(self, ips_dict, output_file, mask_name=None, include_ipv4=True, include_ipv6=True):
+        """Сохранение результатов с выбором IPv4/IPv6 и опциональной маской"""
+        if not (ips_dict['ipv4'] or ips_dict['ipv6']):
+            print("Нет IP-адресов для сохранения")
+            return False
+        
+        # Фильтруем по выбору IPv4/IPv6
+        ips_to_save = []
+        if include_ipv4:
+            ips_to_save.extend(ips_dict['ipv4'])
+        if include_ipv6:
+            ips_to_save.extend(ips_dict['ipv6'])
+        
+        if not ips_to_save:
+            print("Нет выбранных IP-адресов для сохранения")
+            return False
+        
+        if mask_name and mask_name != "none":
+            content = self.apply_mask(ips_to_save, mask_name)
+        else:
+            content = '\n'.join(ips_to_save)
+        
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"Результаты сохранены в файл: {output_file}")
+            return True
+        except Exception as e:
+            print(f"Ошибка при сохранении результатов: {e}")
+            return False
+
     def sort_ip_addresses(self, ip_list):
         """Sort IP addresses for consistent output"""
         # Separate IPv4 and IPv6 addresses
@@ -151,44 +188,57 @@ class IPCIDRProcessor:
         return result
     
     def _consolidate_networks(self, networks):
-        """Helper method to consolidate networks of the same version"""
-        if not networks:
-            return []
-            
-        # Sort networks
-        sorted_nets = sorted(networks, key=lambda net: (net.network_address, net.prefixlen))
-        
-        # Try to merge adjacent networks
-        optimized = [sorted_nets[0]]
-        
-        for current in sorted_nets[1:]:
-            last = optimized[-1]
-            
-            # Check if current network is a subset of the last one
-            if current.subnet_of(last):
-                continue
-                
-            # Check if networks can be merged
-            if (last.network_address <= current.network_address and 
-                last.broadcast_address >= current.broadcast_address):
-                # Current is already covered
-                continue
-                
-            # Try to find a supernet
-            if current.prefixlen == last.prefixlen:
-                try:
-                    # Check if they're adjacent and can be combined
-                    supernet = ipaddress.ip_network(f"{last.network_address}/{last.prefixlen-1}", strict=False)
-                    if (supernet.network_address <= last.network_address and 
-                        supernet.broadcast_address >= current.broadcast_address):
-                        optimized[-1] = supernet
-                        continue
-                except ValueError:
-                    pass
-                    
-            optimized.append(current)
-            
-        return optimized
+            if not networks:
+                return []
+    
+            # Сортировка сетей
+            sorted_nets = sorted(networks, key=lambda net: (net.network_address, net.prefixlen))
+    
+            # Инициализация оптимизированного списка
+            optimized = sorted_nets.copy()
+            changed = True
+            while changed:
+                changed = False
+                new_optimized = []
+                i = 0
+                while i < len(optimized):
+                    current = optimized[i]
+                    if new_optimized:
+                        last = new_optimized[-1]
+                        # Проверка на возможность слияния текущей сети с последней
+                        if current.subnet_of(last):
+                            # Текущая сеть уже покрыта
+                            i += 1
+                            continue
+                        elif last.network_address <= current.network_address and last.broadcast_address >= current.broadcast_address:
+                            # Текущая сеть уже покрыта
+                            i += 1
+                            continue
+                        elif last.prefixlen == current.prefixlen:
+                            try:
+                                # Проверка на соседство
+                                if last.broadcast_address + 1 == current.network_address:
+                                    # Они соседние
+                                    supernet = ipaddress.ip_network(f"{last.network_address}/{last.prefixlen-1}", strict=False)
+                                    if supernet.network_address == last.network_address and supernet.broadcast_address == current.broadcast_address:
+                                        new_optimized[-1] = supernet
+                                        i += 1
+                                        changed = True
+                                        continue
+                            except ValueError:
+                                pass
+                    # Если слияние не произошло, добавляем текущую сеть
+                    new_optimized.append(current)
+                    i += 1
+    
+                # Проверка на изменения
+                if new_optimized != optimized:
+                    optimized = new_optimized
+                    changed = True
+                else:
+                    break
+    
+            return optimized
 
     def download_file(self, url):
         """Загрузка файла по URL"""
@@ -741,25 +791,19 @@ class GUI:
         self.setup_settings_tab()
     
     def setup_local_tab(self):
-        """Настройка вкладки для обработки локальных файлов"""
-        # Верхняя часть - выбор файлов
         frame_files = ttk.LabelFrame(self.tab_local, text="Выбор файлов")
         frame_files.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Список файлов
         frame_list = ttk.Frame(frame_files)
         frame_list.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Полоса прокрутки
         scrollbar = ttk.Scrollbar(frame_list)
         scrollbar.pack(side='right', fill='y')
         
-        # Список файлов
         self.listbox_files = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
         self.listbox_files.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.listbox_files.yview)
         
-        # Кнопки для управления файлами
         frame_buttons = ttk.Frame(frame_files)
         frame_buttons.pack(fill='x', pady=5)
         
@@ -769,11 +813,9 @@ class GUI:
         btn_clear_files = ttk.Button(frame_buttons, text="Очистить список", command=self.clear_local_files)
         btn_clear_files.pack(side='left', padx=5)
         
-        # Настройки обработки
         frame_settings = ttk.LabelFrame(self.tab_local, text="Настройки обработки")
         frame_settings.pack(fill='x', padx=10, pady=5)
         
-        # Выбор маски
         frame_mask = ttk.Frame(frame_settings)
         frame_mask.pack(fill='x', padx=5, pady=5)
         
@@ -783,7 +825,16 @@ class GUI:
         self.combo_local_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_local_mask.set(self.processor.config['default_mask'])
         
-        # Выбор способа сохранения
+        # Выбор типов IP для сохранения
+        frame_ip_types = ttk.Frame(frame_settings)
+        frame_ip_types.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(frame_ip_types, text="Сохранять:").pack(side='left', padx=5)
+        self.var_ipv4 = tk.BooleanVar(value=True)
+        self.var_ipv6 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame_ip_types, text="IPv4", variable=self.var_ipv4).pack(side='left', padx=5)
+        ttk.Checkbutton(frame_ip_types, text="IPv6", variable=self.var_ipv6).pack(side='left', padx=5)
+        
         frame_save = ttk.Frame(frame_settings)
         frame_save.pack(fill='x', padx=5, pady=5)
         
@@ -793,12 +844,9 @@ class GUI:
         rb_combined = ttk.Radiobutton(frame_save, text="В один файл", variable=self.var_save_mode, value="combined")
         rb_combined.pack(side='left', padx=5)
         
-        # Continuing from where the code left off
-
         rb_separate = ttk.Radiobutton(frame_save, text="Отдельными файлами", variable=self.var_save_mode, value="separate")
         rb_separate.pack(side='left', padx=5)
         
-        # Имя выходного файла
         frame_output = ttk.Frame(frame_settings)
         frame_output.pack(fill='x', padx=5, pady=5)
         
@@ -808,19 +856,15 @@ class GUI:
         self.entry_local_output.pack(side='left', fill='x', expand=True, padx=5)
         self.entry_local_output.insert(0, "combined_ips.txt")
         
-        # Кнопка обработки
         btn_process = ttk.Button(self.tab_local, text="Обработать файлы", command=self.process_local_files)
         btn_process.pack(pady=10)
         
-        # Лог обработки
         frame_log = ttk.LabelFrame(self.tab_local, text="Лог обработки")
         frame_log.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Полоса прокрутки для лога
         scrollbar_log = ttk.Scrollbar(frame_log)
         scrollbar_log.pack(side='right', fill='y')
         
-        # Текстовое поле для лога
         self.text_local_log = tk.Text(frame_log, yscrollcommand=scrollbar_log.set, height=10)
         self.text_local_log.pack(side='left', fill='both', expand=True)
         scrollbar_log.config(command=self.text_local_log.yview)
@@ -919,25 +963,19 @@ class GUI:
         scrollbar_log.config(command=self.text_url_log.yview)
     
     def setup_merge_tab(self):
-        """Настройка вкладки для объединения файлов"""
-        # Верхняя часть - выбор файлов
         frame_files = ttk.LabelFrame(self.tab_merge, text="Выбор файлов для объединения")
         frame_files.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Список файлов
         frame_list = ttk.Frame(frame_files)
         frame_list.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Полоса прокрутки
         scrollbar = ttk.Scrollbar(frame_list)
         scrollbar.pack(side='right', fill='y')
         
-        # Список файлов
         self.listbox_merge_files = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
         self.listbox_merge_files.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.listbox_merge_files.yview)
         
-        # Кнопки для управления файлами
         frame_buttons = ttk.Frame(frame_files)
         frame_buttons.pack(fill='x', pady=5)
         
@@ -947,21 +985,29 @@ class GUI:
         btn_clear_files = ttk.Button(frame_buttons, text="Очистить список", command=self.clear_merge_files)
         btn_clear_files.pack(side='left', padx=5)
         
-        # Настройки объединения
         frame_settings = ttk.LabelFrame(self.tab_merge, text="Настройки объединения")
         frame_settings.pack(fill='x', padx=10, pady=5)
         
-        # Выбор маски
         frame_mask = ttk.Frame(frame_settings)
         frame_mask.pack(fill='x', padx=5, pady=5)
         
         ttk.Label(frame_mask, text="Маска:").pack(side='left', padx=5)
         
-        self.combo_merge_mask = ttk.Combobox(frame_mask, values=self.processor.get_masks(), state="readonly")
+        masks = ["none"] + self.processor.get_masks()  # Добавляем опцию "без маски"
+        self.combo_merge_mask = ttk.Combobox(frame_mask, values=masks, state="readonly")
         self.combo_merge_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_merge_mask.set(self.processor.config['default_mask'])
         
-        # Имя выходного файла
+        # Выбор типов IP для сохранения
+        frame_ip_types = ttk.Frame(frame_settings)
+        frame_ip_types.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(frame_ip_types, text="Сохранять:").pack(side='left', padx=5)
+        self.var_merge_ipv4 = tk.BooleanVar(value=True)
+        self.var_merge_ipv6 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame_ip_types, text="IPv4", variable=self.var_merge_ipv4).pack(side='left', padx=5)
+        ttk.Checkbutton(frame_ip_types, text="IPv6", variable=self.var_merge_ipv6).pack(side='left', padx=5)
+        
         frame_output = ttk.Frame(frame_settings)
         frame_output.pack(fill='x', padx=5, pady=5)
         
@@ -971,46 +1017,35 @@ class GUI:
         self.entry_merge_output.pack(side='left', fill='x', expand=True, padx=5)
         self.entry_merge_output.insert(0, "merged_ips.txt")
         
-        # Кнопка объединения
         btn_merge = ttk.Button(self.tab_merge, text="Объединить файлы", command=self.merge_selected_files)
         btn_merge.pack(pady=10)
         
-        # Лог обработки
         frame_log = ttk.LabelFrame(self.tab_merge, text="Лог обработки")
         frame_log.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Полоса прокрутки для лога
         scrollbar_log = ttk.Scrollbar(frame_log)
         scrollbar_log.pack(side='right', fill='y')
         
-        # Текстовое поле для лога
         self.text_merge_log = tk.Text(frame_log, yscrollcommand=scrollbar_log.set, height=10)
         self.text_merge_log.pack(side='left', fill='both', expand=True)
         scrollbar_log.config(command=self.text_merge_log.yview)
     
     def setup_settings_tab(self):
-        """Настройка вкладки для настроек масок"""
-        # Верхняя часть - список масок
         frame_masks = ttk.LabelFrame(self.tab_settings, text="Доступные маски")
         frame_masks.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Список масок
         frame_list = ttk.Frame(frame_masks)
         frame_list.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Полоса прокрутки
         scrollbar = ttk.Scrollbar(frame_list)
         scrollbar.pack(side='right', fill='y')
         
-        # Список масок
         self.listbox_masks = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
         self.listbox_masks.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.listbox_masks.yview)
         
-        # Обновление списка масок
         self.update_mask_list()
         
-        # Кнопки для управления масками
         frame_buttons = ttk.Frame(frame_masks)
         frame_buttons.pack(fill='x', pady=5)
         
@@ -1020,11 +1055,9 @@ class GUI:
         btn_set_default = ttk.Button(frame_buttons, text="Установить по умолчанию", command=self.set_default_mask)
         btn_set_default.pack(side='left', padx=5)
         
-        # Добавление/изменение маски
         frame_edit = ttk.LabelFrame(self.tab_settings, text="Добавление/изменение маски")
         frame_edit.pack(fill='x', padx=10, pady=5)
         
-        # Имя маски
         frame_name = ttk.Frame(frame_edit)
         frame_name.pack(fill='x', padx=5, pady=5)
         
@@ -1033,7 +1066,6 @@ class GUI:
         self.entry_mask_name = ttk.Entry(frame_name)
         self.entry_mask_name.pack(side='left', fill='x', expand=True, padx=5)
         
-        # Префикс
         frame_prefix = ttk.Frame(frame_edit)
         frame_prefix.pack(fill='x', padx=5, pady=5)
         
@@ -1042,7 +1074,6 @@ class GUI:
         self.entry_mask_prefix = ttk.Entry(frame_prefix)
         self.entry_mask_prefix.pack(side='left', fill='x', expand=True, padx=5)
         
-        # Суффикс
         frame_suffix = ttk.Frame(frame_edit)
         frame_suffix.pack(fill='x', padx=5, pady=5)
         
@@ -1051,39 +1082,47 @@ class GUI:
         self.entry_mask_suffix = ttk.Entry(frame_suffix)
         self.entry_mask_suffix.pack(side='left', fill='x', expand=True, padx=5)
         
-        # Разделитель
         frame_separator = ttk.Frame(frame_edit)
         frame_separator.pack(fill='x', padx=5, pady=5)
         
         ttk.Label(frame_separator, text="Разделитель:").pack(side='left', padx=5)
         
         self.var_separator = tk.StringVar(value="newline")
-        rb_newline = ttk.Radiobutton(frame_separator, text="Новая строка", variable=self.var_separator, value="newline")
-        rb_newline.pack(side='left', padx=5)
+        separators = [
+            ("Новая строка", "newline", "\n"),
+            ("Запятая и пробел", "comma", ", "),
+            ("Точка с запятой", "semicolon", ";"),
+            ("Вертикальная черта", "pipe", "|"),
+            ("Табуляция", "tab", "\t"),
+            ("Свой:", "custom", "")
+        ]
         
-        rb_comma = ttk.Radiobutton(frame_separator, text="Запятая и пробел", variable=self.var_separator, value="comma")
-        rb_comma.pack(side='left', padx=5)
+        for label, value, sep in separators:
+            if value == "custom":
+                frame_custom = ttk.Frame(frame_separator)
+                frame_custom.pack(side='left', padx=5)
+                ttk.Radiobutton(frame_custom, text=label, variable=self.var_separator, value=value).pack(side='left')
+                self.entry_separator = ttk.Entry(frame_custom, width=10)
+                self.entry_separator.pack(side='left', padx=5)
+            else:
+                ttk.Radiobutton(frame_separator, text=label, variable=self.var_separator, value=value).pack(side='left', padx=5)
         
-        rb_custom = ttk.Radiobutton(frame_separator, text="Свой:", variable=self.var_separator, value="custom")
-        rb_custom.pack(side='left', padx=5)
+        frame_examples = ttk.Frame(frame_edit)
+        frame_examples.pack(fill='x', padx=5, pady=5)
         
-        self.entry_separator = ttk.Entry(frame_separator, width=10)
-        self.entry_separator.pack(side='left', padx=5)
+        ttk.Label(frame_examples, text="Примеры:").pack(side='left', padx=5)
         
-        # Пример
-        frame_example = ttk.Frame(frame_edit)
-        frame_example.pack(fill='x', padx=5, pady=5)
+        self.label_example1 = ttk.Label(frame_examples, text="", wraplength=700)
+        self.label_example1.pack(side='top', fill='x', padx=5)
         
-        ttk.Label(frame_example, text="Пример:").pack(side='left', padx=5)
+        self.label_example2 = ttk.Label(frame_examples, text="", wraplength=700)
+        self.label_example2.pack(side='top', fill='x', padx=5)
         
-        self.label_example = ttk.Label(frame_example, text="")
-        self.label_example.pack(side='left', fill='x', expand=True, padx=5)
+        self.entry_mask_prefix.bind("<KeyRelease>", self.update_examples)
+        self.entry_mask_suffix.bind("<KeyRelease>", self.update_examples)
+        self.entry_separator.bind("<KeyRelease>", self.update_examples)
+        self.var_separator.trace_add("write", lambda *args: self.update_examples())
         
-        # Привязываем обновление примера к изменению полей
-        self.entry_mask_prefix.bind("<KeyRelease>", self.update_example)
-        self.entry_mask_suffix.bind("<KeyRelease>", self.update_example)
-        
-        # Кнопки
         frame_mask_buttons = ttk.Frame(frame_edit)
         frame_mask_buttons.pack(fill='x', pady=5)
         
@@ -1092,6 +1131,27 @@ class GUI:
         
         btn_clear_fields = ttk.Button(frame_mask_buttons, text="Очистить поля", command=self.clear_mask_fields)
         btn_clear_fields.pack(side='left', padx=5)
+
+    def update_examples(self, event=None):
+        prefix = self.entry_mask_prefix.get()
+        suffix = self.entry_mask_suffix.get()
+        
+        separator_type = self.var_separator.get()
+        separators = {
+            "newline": "\n",
+            "comma": ", ",
+            "semicolon": ";",
+            "pipe": "|",
+            "tab": "\t",
+            "custom": self.entry_separator.get()
+        }
+        separator = separators.get(separator_type, "\n")
+        
+        example_ip1 = "192.168.1.0/24"
+        example_ip2 = "2001:db8::/32"
+        
+        self.label_example1.config(text=f"IPv4: {prefix}{example_ip1}{suffix}")
+        self.label_example2.config(text=f"IPv6: {prefix}{example_ip2}{suffix} (разделитель: '{separator.replace('\n', '\\n')}' между записями)")
     
     def start(self):
         """Запуск графического интерфейса"""
@@ -1113,41 +1173,54 @@ class GUI:
         self.listbox_files.delete(0, tk.END)
     
     def process_local_files(self):
-        """Обработка локальных файлов"""
         if not self.selected_files:
             messagebox.showwarning("Предупреждение", "Не выбраны файлы для обработки")
             return
         
-        # Очищаем лог
         self.text_local_log.delete(1.0, tk.END)
         
-        # Получаем настройки
         selected_mask = self.combo_local_mask.get()
         save_mode = self.var_save_mode.get()
         output_file = self.entry_local_output.get()
+        include_ipv4 = self.var_ipv4.get()
+        include_ipv6 = self.var_ipv6.get()
         
         if not output_file:
             output_file = "combined_ips.txt"
         
-        # Обрабатываем файлы
-        all_ips = []
+        all_ips = {'ipv4': [], 'ipv6': []}
         for file_path in self.selected_files:
             self.log_local(f"Обработка файла: {file_path}")
-            ips = self.processor.process_file(file_path)
-            if ips:
-                self.log_local(f"Найдено {len(ips)} IP-адресов в CIDR формате")
-                all_ips.extend(ips)
+            ips_dict = self.processor.process_file(file_path)
+            if ips_dict['ipv4'] or ips_dict['ipv6']:
+                self.log_local(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
+                all_ips['ipv4'].extend(ips_dict['ipv4'])
+                all_ips['ipv6'].extend(ips_dict['ipv6'])
                 
                 if save_mode == "separate":
                     base_name = os.path.basename(file_path)
                     output_path = os.path.join(self.processor.output_folder, f"processed_{base_name}")
-                    success = self.processor.save_results(ips, output_path, selected_mask)
+                    success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
                     if success:
                         self.log_local(f"Результаты сохранены в файл: {output_path}")
                     else:
                         self.log_local(f"Ошибка при сохранении в файл: {output_path}")
             else:
                 self.log_local(f"IP-адреса в CIDR формате не найдены")
+        
+        all_ips['ipv4'] = list(set(all_ips['ipv4']))
+        all_ips['ipv6'] = list(set(all_ips['ipv6']))
+        self.log_local(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
+        
+        if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
+            output_path = os.path.join(self.processor.output_folder, output_file)
+            success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
+            if success:
+                self.log_local(f"Все IP-адреса сохранены в файл: {output_path}")
+            else:
+                self.log_local(f"Ошибка при сохранении в файл: {output_path}")
+        
+        self.log_local("\nОбработка завершена")
         
         # Удаляем дубликаты
         all_ips = list(set(all_ips))
@@ -1272,19 +1345,18 @@ class GUI:
         self.listbox_merge_files.delete(0, tk.END)
     
     def merge_selected_files(self):
-        """Объединение выбранных файлов"""
         files = [self.listbox_merge_files.get(i) for i in range(self.listbox_merge_files.size())]
         
         if not files:
             messagebox.showwarning("Предупреждение", "Не выбраны файлы для объединения")
             return
         
-        # Очищаем лог
         self.text_merge_log.delete(1.0, tk.END)
         
-        # Получаем настройки
         selected_mask = self.combo_merge_mask.get()
         output_file = self.entry_merge_output.get()
+        include_ipv4 = self.var_merge_ipv4.get()
+        include_ipv6 = self.var_merge_ipv6.get()
         
         if not output_file:
             output_file = "merged_ips.txt"
@@ -1293,7 +1365,17 @@ class GUI:
         
         self.log_merge(f"Объединение {len(files)} файлов...")
         
-        success = self.processor.merge_files(files, output_path, selected_mask)
+        all_ips = {'ipv4': [], 'ipv6': []}
+        for file_path in files:
+            ips_dict = self.processor.process_file(file_path)
+            all_ips['ipv4'].extend(ips_dict['ipv4'])
+            all_ips['ipv6'].extend(ips_dict['ipv6'])
+        
+        all_ips['ipv4'] = list(set(all_ips['ipv4']))
+        all_ips['ipv6'] = list(set(all_ips['ipv6']))
+        self.log_merge(f"Найдено уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
+        
+        success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
         if success:
             self.log_merge(f"Файлы успешно объединены и сохранены в: {output_path}")
         else:
