@@ -1,11 +1,12 @@
 # -*- mode: python -*-
 import sys
-from os.path import join, dirname, abspath
+import os
+from os.path import join, abspath
 
 block_cipher = None
 
 # Определяем корневую директорию проекта
-root_dir = abspath(dirname(__file__))
+root_dir = os.getcwd()
 
 # Обнаружение OS для правильного именования
 import platform
