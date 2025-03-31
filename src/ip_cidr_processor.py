@@ -869,24 +869,19 @@ class GUI:
     
     def setup_url_tab(self):
         """Настройка вкладки для обработки файлов по URL"""
-        # Верхняя часть - ввод URL
         frame_urls = ttk.LabelFrame(self.tab_url, text="Ввод URL")
         frame_urls.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Список URL
         frame_list = ttk.Frame(frame_urls)
         frame_list.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Полоса прокрутки
         scrollbar = ttk.Scrollbar(frame_list)
         scrollbar.pack(side='right', fill='y')
         
-        # Список URL
         self.listbox_urls = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
         self.listbox_urls.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.listbox_urls.yview)
         
-        # Добавление URL
         frame_add_url = ttk.Frame(frame_urls)
         frame_add_url.pack(fill='x', pady=5)
         
@@ -896,7 +891,6 @@ class GUI:
         btn_add_url = ttk.Button(frame_add_url, text="Добавить URL", command=self.add_url)
         btn_add_url.pack(side='left', padx=5)
         
-        # Кнопки для управления URL
         frame_buttons = ttk.Frame(frame_urls)
         frame_buttons.pack(fill='x', pady=5)
         
@@ -906,11 +900,9 @@ class GUI:
         btn_clear_urls = ttk.Button(frame_buttons, text="Очистить список", command=self.clear_urls)
         btn_clear_urls.pack(side='left', padx=5)
         
-        # Настройки обработки
         frame_settings = ttk.LabelFrame(self.tab_url, text="Настройки обработки")
         frame_settings.pack(fill='x', padx=10, pady=5)
         
-        # Выбор маски
         frame_mask = ttk.Frame(frame_settings)
         frame_mask.pack(fill='x', padx=5, pady=5)
         
@@ -920,7 +912,16 @@ class GUI:
         self.combo_url_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_url_mask.set(self.processor.config['default_mask'])
         
-        # Выбор способа сохранения
+        # Выбор типов IP для сохранения
+        frame_ip_types = ttk.Frame(frame_settings)
+        frame_ip_types.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(frame_ip_types, text="Сохранять:").pack(side='left', padx=5)
+        self.var_url_ipv4 = tk.BooleanVar(value=True)
+        self.var_url_ipv6 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame_ip_types, text="IPv4", variable=self.var_url_ipv4).pack(side='left', padx=5)
+        ttk.Checkbutton(frame_ip_types, text="IPv6", variable=self.var_url_ipv6).pack(side='left', padx=5)
+        
         frame_save = ttk.Frame(frame_settings)
         frame_save.pack(fill='x', padx=5, pady=5)
         
@@ -933,7 +934,6 @@ class GUI:
         rb_separate = ttk.Radiobutton(frame_save, text="Отдельными файлами", variable=self.var_url_save_mode, value="separate")
         rb_separate.pack(side='left', padx=5)
         
-        # Имя выходного файла
         frame_output = ttk.Frame(frame_settings)
         frame_output.pack(fill='x', padx=5, pady=5)
         
@@ -943,19 +943,15 @@ class GUI:
         self.entry_url_output.pack(side='left', fill='x', expand=True, padx=5)
         self.entry_url_output.insert(0, "combined_urls.txt")
         
-        # Кнопка обработки
         btn_process = ttk.Button(self.tab_url, text="Обработать URL", command=self.process_urls)
         btn_process.pack(pady=10)
         
-        # Лог обработки
         frame_log = ttk.LabelFrame(self.tab_url, text="Лог обработки")
         frame_log.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Полоса прокрутки для лога
         scrollbar_log = ttk.Scrollbar(frame_log)
         scrollbar_log.pack(side='right', fill='y')
         
-        # Текстовое поле для лога
         self.text_url_log = tk.Text(frame_log, yscrollcommand=scrollbar_log.set, height=10)
         self.text_url_log.pack(side='left', fill='both', expand=True)
         scrollbar_log.config(command=self.text_url_log.yview)
@@ -1130,7 +1126,7 @@ class GUI:
         btn_clear_fields = ttk.Button(frame_mask_buttons, text="Очистить поля", command=self.clear_mask_fields)
         btn_clear_fields.pack(side='left', padx=5)
 
-    def update_examples(self, event=None):
+    def update_example(self, event=None):
         prefix = self.entry_mask_prefix.get()
         suffix = self.entry_mask_suffix.get()
         
@@ -1144,8 +1140,6 @@ class GUI:
             "custom": self.entry_separator.get()
         }
         separator = separators.get(separator_type, "\n")
-        
-        # Выносим замену вне f-строки
         separator_display = separator.replace('\n', '\\n')
         
         example_ip1 = "192.168.1.0/24"
@@ -1273,37 +1267,49 @@ class GUI:
             messagebox.showwarning("Предупреждение", "Не указаны URL для обработки")
             return
         
-        # Очищаем лог
         self.text_url_log.delete(1.0, tk.END)
         
-        # Получаем настройки
         selected_mask = self.combo_url_mask.get()
         save_mode = self.var_url_save_mode.get()
         output_file = self.entry_url_output.get()
+        include_ipv4 = self.var_url_ipv4.get()
+        include_ipv6 = self.var_url_ipv6.get()
         
         if not output_file:
             output_file = "combined_urls.txt"
         
-        # Обрабатываем URL
-        all_ips = []
+        all_ips = {'ipv4': [], 'ipv6': []}
         for url in self.selected_urls:
             self.log_url(f"Загрузка файла по URL: {url}")
             content = self.processor.download_file(url)
             if content:
                 ips = self.processor.extract_ips(content)
-                if ips:
-                    self.log_url(f"Найдено {len(ips)} IP-адресов в CIDR формате")
-                    all_ips.extend(ips)
+                # Разделяем на IPv4 и IPv6
+                ips_dict = {'ipv4': [], 'ipv6': []}
+                for ip in ips:
+                    if isinstance(ip, tuple):  # Если включены комментарии
+                        ip_cidr = ip[0]
+                    else:
+                        ip_cidr = ip
+                    network = ipaddress.ip_network(ip_cidr, strict=False)
+                    if network.version == 4:
+                        ips_dict['ipv4'].append(ip)
+                    elif network.version == 6:
+                        ips_dict['ipv6'].append(ip)
+                
+                if ips_dict['ipv4'] or ips_dict['ipv6']:
+                    self.log_url(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
+                    all_ips['ipv4'].extend(ips_dict['ipv4'])
+                    all_ips['ipv6'].extend(ips_dict['ipv6'])
                     
                     if save_mode == "separate":
-                        # Создаем имя файла на основе URL
                         url_parts = urlparse(url)
                         file_name = os.path.basename(url_parts.path)
                         if not file_name:
                             file_name = url_parts.netloc.replace('.', '_') + ".txt"
                         
                         output_path = os.path.join(self.processor.output_folder, f"url_{file_name}")
-                        success = self.processor.save_results(ips, output_path, selected_mask)
+                        success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
                         if success:
                             self.log_url(f"Результаты сохранены в файл: {output_path}")
                         else:
@@ -1313,14 +1319,13 @@ class GUI:
             else:
                 self.log_url(f"Ошибка при загрузке файла")
         
-        # Удаляем дубликаты
-        all_ips = list(set(all_ips))
-        self.log_url(f"\nВсего уникальных IP-адресов: {len(all_ips)}")
+        all_ips['ipv4'] = list(set(all_ips['ipv4']))
+        all_ips['ipv6'] = list(set(all_ips['ipv6']))
+        self.log_url(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
         
-        # Сохраняем в один файл, если нужно
-        if save_mode == "combined" and all_ips:
+        if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
             output_path = os.path.join(self.processor.output_folder, output_file)
-            success = self.processor.save_results(all_ips, output_path, selected_mask)
+            success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
             if success:
                 self.log_url(f"Все IP-адреса сохранены в файл: {output_path}")
             else:
@@ -1400,7 +1405,6 @@ class GUI:
             self.listbox_masks.insert(tk.END, f"{mask['name']}{default_mark}")
     
     def edit_mask(self):
-        """Редактирование выбранной маски"""
         selection = self.listbox_masks.curselection()
         if not selection:
             messagebox.showwarning("Предупреждение", "Не выбрана маска для редактирования")
@@ -1409,13 +1413,11 @@ class GUI:
         index = selection[0]
         mask_name = self.listbox_masks.get(index).split(" (по умолчанию)")[0]
         
-        # Находим маску в конфигурации
         mask = next((m for m in self.processor.config['masks'] if m['name'] == mask_name), None)
         if not mask:
             messagebox.showerror("Ошибка", "Маска не найдена")
             return
         
-        # Заполняем поля данными маски
         self.entry_mask_name.delete(0, tk.END)
         self.entry_mask_name.insert(0, mask['name'])
         
@@ -1425,18 +1427,22 @@ class GUI:
         self.entry_mask_suffix.delete(0, tk.END)
         self.entry_mask_suffix.insert(0, mask['suffix'])
         
-        # Устанавливаем разделитель
         if mask['separator'] == '\n':
             self.var_separator.set("newline")
         elif mask['separator'] == ', ':
             self.var_separator.set("comma")
+        elif mask['separator'] == ';':
+            self.var_separator.set("semicolon")
+        elif mask['separator'] == '|':
+            self.var_separator.set("pipe")
+        elif mask['separator'] == '\t':
+            self.var_separator.set("tab")
         else:
             self.var_separator.set("custom")
             self.entry_separator.delete(0, tk.END)
             self.entry_separator.insert(0, mask['separator'])
         
-        # Обновляем пример
-        self.update_example()
+        self.update_example()  # Обновляем примеры
     
     def set_default_mask(self):
         """Установка выбранной маски по умолчанию"""
@@ -1463,7 +1469,6 @@ class GUI:
         self.label_example.config(text=f"{prefix}{example_ip}{suffix}")
     
     def add_mask(self):
-        """Добавление новой маски"""
         name = self.entry_mask_name.get().strip()
         prefix = self.entry_mask_prefix.get()
         suffix = self.entry_mask_suffix.get()
@@ -1472,14 +1477,16 @@ class GUI:
             messagebox.showwarning("Предупреждение", "Имя маски не может быть пустым")
             return
         
-        # Получаем разделитель
         separator_type = self.var_separator.get()
-        if separator_type == "newline":
-            separator = '\n'
-        elif separator_type == "comma":
-            separator = ', '
-        else:
-            separator = self.entry_separator.get()
+        separators = {
+            "newline": "\n",
+            "comma": ", ",
+            "semicolon": ";",
+            "pipe": "|",
+            "tab": "\t",
+            "custom": self.entry_separator.get()
+        }
+        separator = separators.get(separator_type, "\n")
         
         if self.processor.add_mask(name, prefix, suffix, separator):
             messagebox.showinfo("Успех", f"Маска '{name}' успешно добавлена")
@@ -1489,13 +1496,13 @@ class GUI:
             messagebox.showerror("Ошибка", "Не удалось добавить маску")
     
     def clear_mask_fields(self):
-        """Очистка полей маски"""
         self.entry_mask_name.delete(0, tk.END)
         self.entry_mask_prefix.delete(0, tk.END)
         self.entry_mask_suffix.delete(0, tk.END)
         self.var_separator.set("newline")
         self.entry_separator.delete(0, tk.END)
-        self.label_example.config(text="")
+        self.label_example1.config(text="")
+        self.label_example2.config(text="")
 
 
 def main():
