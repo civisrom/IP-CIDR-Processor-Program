@@ -1112,10 +1112,11 @@ class GUI:
         self.label_example2 = ttk.Label(frame_examples, text="", wraplength=700)
         self.label_example2.pack(side='top', fill='x', padx=5)
         
-        self.entry_mask_prefix.bind("<KeyRelease>", self.update_examples)
-        self.entry_mask_suffix.bind("<KeyRelease>", self.update_examples)
-        self.entry_separator.bind("<KeyRelease>", self.update_examples)
-        self.var_separator.trace_add("write", lambda *args: self.update_examples())
+        # Исправляем привязку с update_examples на update_example
+        self.entry_mask_prefix.bind("<KeyRelease>", self.update_example)
+        self.entry_mask_suffix.bind("<KeyRelease>", self.update_example)
+        self.entry_separator.bind("<KeyRelease>", self.update_example)
+        self.var_separator.trace_add("write", lambda *args: self.update_example())
         
         frame_mask_buttons = ttk.Frame(frame_edit)
         frame_mask_buttons.pack(fill='x', pady=5)
@@ -1442,7 +1443,7 @@ class GUI:
             self.entry_separator.delete(0, tk.END)
             self.entry_separator.insert(0, mask['separator'])
         
-        self.update_example()  # Обновляем примеры
+        self.update_example()  # Вызываем правильный метод
     
     def set_default_mask(self):
         """Установка выбранной маски по умолчанию"""
