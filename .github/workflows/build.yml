@@ -76,9 +76,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ip_cidr_processor_${{ matrix.os }}
-        path: |
-          dist/ip_cidr_processor_${{ matrix.os }}*
-          dist/version.txt
+        path: dist/
         if-no-files-found: warn
 
   release:
@@ -91,6 +89,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: artifacts
+        merge-multiple: true
         
     - name: Display structure of downloaded files
       run: ls -R artifacts/
@@ -104,8 +103,8 @@ jobs:
         prerelease: false
         generate_release_notes: true
         files: |
-          artifacts/ip_cidr_processor_ubuntu-latest/ip_cidr_processor_ubuntu-latest
-          artifacts/ip_cidr_processor_windows-latest/ip_cidr_processor_windows-latest.exe
-          artifacts/*/version.txt
+          artifacts/ip_cidr_processor_ubuntu-latest
+          artifacts/ip_cidr_processor_windows-latest.exe
+          artifacts/version.txt
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
