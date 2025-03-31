@@ -1,0 +1,62 @@
+# -*- mode: python -*-
+import sys
+from os.path import join, dirname, abspath
+
+block_cipher = None
+
+# Определяем корневую директорию проекта
+root_dir = abspath(dirname(__file__))
+
+# Обнаружение OS для правильного именования
+import platform
+os_name = 'windows-latest' if platform.system() == 'Windows' else 'ubuntu-latest'
+
+# Определение имени исполняемого файла на основе ОС
+if platform.system() == 'Windows':
+    exe_name = f'ip_cidr_processor_{os_name}.exe'
+else:
+    exe_name = f'ip_cidr_processor_{os_name}'
+
+a = Analysis(
+    [join(root_dir, 'src', 'ip_cidr_processor.py')],
+    pathex=[root_dir],
+    binaries=[],
+    datas=[],
+    hiddenimports=['yaml', 'requests'],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(
+    a.pure, 
+    a.zipped_data,
+    cipher=block_cipher
+)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name=exe_name,
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
