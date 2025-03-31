@@ -33,11 +33,12 @@ jobs:
       run: |
         pyinstaller --onefile --name ip_cidr_processor_${{ matrix.os }} src/ip_cidr_processor.py
         echo "Build contents:"
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          dir dist/
-        else
+        if ("${{ matrix.os }}" -eq "windows-latest") {
+          Get-ChildItem dist/
+        } else {
           ls -la dist/
-        fi
+        }
+      shell: pwsh
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
