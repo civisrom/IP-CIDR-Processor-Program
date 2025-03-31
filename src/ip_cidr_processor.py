@@ -27,6 +27,7 @@ class IPCIDRProcessor:
                     {'name': 'surge', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n'},
                     {'name': 'shadowsocks', 'prefix': '', 'suffix': '@shadowsocks', 'separator': ' | '},
                     {'name': 'json', 'prefix': '{"ip": "', 'suffix': '"}', 'separator': ',\n'},
+                    {'name': 'range', 'prefix': '', 'suffix': '', 'separator': '\n'}  # Новая маска для диапазонов
                 ],
                 'default_mask': 'default'
             }
@@ -59,6 +60,17 @@ class IPCIDRProcessor:
         except Exception as e:
             print(f"Ошибка при сохранении конфигурации: {e}")
             return False
+
+    def cidr_to_range(self, cidr):
+        """Преобразование CIDR в диапазон адресов"""
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+            first_ip = network.network_address
+            last_ip = network.broadcast_address
+            return f"{first_ip}-{last_ip}"
+        except ValueError as e:
+            print(f"Ошибка при преобразовании CIDR в диапазон: {e}")
+            return cidr  # Возвращаем исходный CIDR в случае ошибки
 
     def validate_ip_cidr(self, ip_cidr):
         """Validate if a string is a valid IP CIDR notation"""
@@ -103,27 +115,40 @@ class IPCIDRProcessor:
             print(f"Ошибка при обработке файла {file_path}: {e}")
             return {'ipv4': [], 'ipv6': []}
     
-    def save_results_with_options(self, ips_dict, output_file, mask_name=None, include_ipv4=True, include_ipv6=True):
-        """Сохранение результатов с выбором IPv4/IPv6 и опциональной маской"""
-        if not (ips_dict['ipv4'] or ips_dict['ipv6']):
+    def save_results_with_options(self, ips_list, output_file, mask_name=None, include_ipv4=True, include_ipv6=True):
+        """Сохранение результатов с выбором IPv4/IPv6 и опциональной маской, включая комментарии и диапазоны"""
+        if not ips_list:
             print("Нет IP-адресов для сохранения")
             return False
         
-        # Фильтруем по выбору IPv4/IPv6
         ips_to_save = []
-        if include_ipv4:
-            ips_to_save.extend(ips_dict['ipv4'])
-        if include_ipv6:
-            ips_to_save.extend(ips_dict['ipv6'])
+        for ip in ips_list:
+            if isinstance(ip, tuple):  # Если включены комментарии
+                ip_cidr, comment = ip
+            else:
+                ip_cidr, comment = ip, ""
+            network = ipaddress.ip_network(ip_cidr, strict=False)
+            if (include_ipv4 and network.version == 4) or (include_ipv6 and network.version == 6):
+                ips_to_save.append((ip_cidr, comment))
         
         if not ips_to_save:
             print("Нет выбранных IP-адресов для сохранения")
             return False
         
         if mask_name and mask_name != "none":
-            content = self.apply_mask(ips_to_save, mask_name)
+            mask = next((m for m in self.config['masks'] if m['name'] == mask_name), None)
+            if not mask:
+                mask = next((m for m in self.config['masks'] if m['name'] == self.config['default_mask']), self.config['masks'][0])
+            
+            if mask['name'] == 'range':
+                # Преобразование CIDR в диапазон для маски range
+                formatted_ips = [f"{self.cidr_to_range(ip)} # {comment}" if comment else self.cidr_to_range(ip) for ip, comment in ips_to_save]
+            else:
+                # Обычная обработка для других масок
+                formatted_ips = [f"{mask['prefix']}{ip}{mask['suffix']} # {comment}" if comment else f"{mask['prefix']}{ip}{mask['suffix']}" for ip, comment in ips_to_save]
+            content = mask['separator'].join(formatted_ips)
         else:
-            content = '\n'.join(ips_to_save)
+            content = '\n'.join([f"{ip} # {comment}" if comment else ip for ip, comment in ips_to_save])
         
         try:
             with open(output_file, 'w', encoding='utf-8') as f:
@@ -1216,21 +1241,6 @@ class GUI:
                 self.log_local(f"Ошибка при сохранении в файл: {output_path}")
         
         self.log_local("\nОбработка завершена")
-        
-        # Удаляем дубликаты
-        all_ips = list(set(all_ips))
-        self.log_local(f"\nВсего уникальных IP-адресов: {len(all_ips)}")
-        
-        # Сохраняем в один файл, если нужно
-        if save_mode == "combined" and all_ips:
-            output_path = os.path.join(self.processor.output_folder, output_file)
-            success = self.processor.save_results(all_ips, output_path, selected_mask)
-            if success:
-                self.log_local(f"Все IP-адреса сохранены в файл: {output_path}")
-            else:
-                self.log_local(f"Ошибка при сохранении в файл: {output_path}")
-        
-        self.log_local("\nОбработка завершена")
     
     def log_local(self, message):
         """Добавление сообщения в лог локальных файлов"""
@@ -1262,7 +1272,6 @@ class GUI:
         self.listbox_urls.delete(0, tk.END)
     
     def process_urls(self):
-        """Обработка URL"""
         if not self.selected_urls:
             messagebox.showwarning("Предупреждение", "Не указаны URL для обработки")
             return
@@ -1284,7 +1293,6 @@ class GUI:
             content = self.processor.download_file(url)
             if content:
                 ips = self.processor.extract_ips(content)
-                # Разделяем на IPv4 и IPv6
                 ips_dict = {'ipv4': [], 'ipv6': []}
                 for ip in ips:
                     if isinstance(ip, tuple):  # Если включены комментарии
