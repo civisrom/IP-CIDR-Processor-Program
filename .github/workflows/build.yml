@@ -1,6 +1,7 @@
 name: Build IP CIDR Processor
 
-on: 
+on:
+  workflow_dispatch:
   push:
     branches: [ main, master ]
   pull_request:
