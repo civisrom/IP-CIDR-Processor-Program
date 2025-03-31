@@ -58,8 +58,13 @@ jobs:
       run: |
         VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
         VERSION=${VERSION#v}
-        [ "$VERSION" == "main" ] || [ "$VERSION" == "master" ] && VERSION=$(date +'%Y%m%d%H%M')
+        if [ "$VERSION" == "main" ] || [ "$VERSION" == "master" ]; then
+          VERSION=$(date +'%Y%m%d%H%M')
+        fi
         echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+        
+        # Ensure dist directory exists
+        mkdir -p dist
         echo "$VERSION" > dist/version.txt
       shell: bash
     
