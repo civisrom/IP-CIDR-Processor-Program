@@ -115,21 +115,32 @@ class IPCIDRProcessor:
             print(f"Ошибка при обработке файла {file_path}: {e}")
             return {'ipv4': [], 'ipv6': []}
     
-    def save_results_with_options(self, ips_list, output_file, mask_name=None, include_ipv4=True, include_ipv6=True):
+    def save_results_with_options(self, ips_dict, output_file, mask_name=None, include_ipv4=True, include_ipv6=True):
         """Сохранение результатов с выбором IPv4/IPv6 и опциональной маской, включая комментарии и диапазоны"""
-        if not ips_list:
+        if not ips_dict or ('ipv4' not in ips_dict and 'ipv6' not in ips_dict):
             print("Нет IP-адресов для сохранения")
             return False
         
         ips_to_save = []
-        for ip in ips_list:
-            if isinstance(ip, tuple):  # Если включены комментарии
-                ip_cidr, comment = ip
-            else:
-                ip_cidr, comment = ip, ""
-            network = ipaddress.ip_network(ip_cidr, strict=False)
-            if (include_ipv4 and network.version == 4) or (include_ipv6 and network.version == 6):
-                ips_to_save.append((ip_cidr, comment))
+        if include_ipv4 and 'ipv4' in ips_dict:
+            for ip in ips_dict['ipv4']:
+                if isinstance(ip, tuple):  # Если включены комментарии
+                    ip_cidr, comment = ip
+                else:
+                    ip_cidr, comment = ip, ""
+                network = ipaddress.ip_network(ip_cidr, strict=False)
+                if network.version == 4:
+                    ips_to_save.append((ip_cidr, comment))
+        
+        if include_ipv6 and 'ipv6' in ips_dict:
+            for ip in ips_dict['ipv6']:
+                if isinstance(ip, tuple):  # Если включены комментарии
+                    ip_cidr, comment = ip
+                else:
+                    ip_cidr, comment = ip, ""
+                network = ipaddress.ip_network(ip_cidr, strict=False)
+                if network.version == 6:
+                    ips_to_save.append((ip_cidr, comment))
         
         if not ips_to_save:
             print("Нет выбранных IP-адресов для сохранения")
@@ -323,7 +334,7 @@ class IPCIDRProcessor:
         return self.save_config(self.config)
 
     def get_masks(self):
-        """Получение списка доступных масок"""
+        """Получение списка имен масок"""
         return [mask['name'] for mask in self.config['masks']]
 
     def set_default_mask(self, mask_name):
@@ -823,18 +834,18 @@ class GUI:
         scrollbar = ttk.Scrollbar(frame_list)
         scrollbar.pack(side='right', fill='y')
         
-        self.listbox_files = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
-        self.listbox_files.pack(side='left', fill='both', expand=True)
-        scrollbar.config(command=self.listbox_files.yview)
+        self.listbox_local_files = tk.Listbox(frame_list, selectmode='multiple', yscrollcommand=scrollbar.set)
+        self.listbox_local_files.pack(side='left', fill='both', expand=True)
+        scrollbar.config(command=self.listbox_local_files.yview)
         
         frame_buttons = ttk.Frame(frame_files)
         frame_buttons.pack(fill='x', pady=5)
         
-        btn_add_files = ttk.Button(frame_buttons, text="Добавить файлы", command=self.add_local_files)
-        btn_add_files.pack(side='left', padx=5)
+        btn_add = ttk.Button(frame_buttons, text="Добавить файлы", command=self.add_local_files)
+        btn_add.pack(side='left', padx=5)
         
-        btn_clear_files = ttk.Button(frame_buttons, text="Очистить список", command=self.clear_local_files)
-        btn_clear_files.pack(side='left', padx=5)
+        btn_remove = ttk.Button(frame_buttons, text="Удалить выбранные", command=self.remove_local_files)
+        btn_remove.pack(side='left', padx=5)
         
         frame_settings = ttk.LabelFrame(self.tab_local, text="Настройки обработки")
         frame_settings.pack(fill='x', padx=10, pady=5)
@@ -848,7 +859,6 @@ class GUI:
         self.combo_local_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_local_mask.set(self.processor.config['default_mask'])
         
-        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -863,12 +873,12 @@ class GUI:
         
         ttk.Label(frame_save, text="Сохранение:").pack(side='left', padx=5)
         
-        self.var_save_mode = tk.StringVar(value="combined")
-        rb_combined = ttk.Radiobutton(frame_save, text="В один файл", variable=self.var_save_mode, value="combined")
-        rb_combined.pack(side='left', padx=5)
-        
+        self.var_save_mode = tk.StringVar(value="separate")
         rb_separate = ttk.Radiobutton(frame_save, text="Отдельными файлами", variable=self.var_save_mode, value="separate")
         rb_separate.pack(side='left', padx=5)
+        
+        rb_combined = ttk.Radiobutton(frame_save, text="В один файл", variable=self.var_save_mode, value="combined")
+        rb_combined.pack(side='left', padx=5)
         
         frame_output = ttk.Frame(frame_settings)
         frame_output.pack(fill='x', padx=5, pady=5)
@@ -893,7 +903,6 @@ class GUI:
         scrollbar_log.config(command=self.text_local_log.yview)
     
     def setup_url_tab(self):
-        """Настройка вкладки для обработки файлов по URL"""
         frame_urls = ttk.LabelFrame(self.tab_url, text="Ввод URL")
         frame_urls.pack(fill='both', expand=True, padx=10, pady=5)
         
@@ -937,7 +946,6 @@ class GUI:
         self.combo_url_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_url_mask.set(self.processor.config['default_mask'])
         
-        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -991,18 +999,18 @@ class GUI:
         scrollbar = ttk.Scrollbar(frame_list)
         scrollbar.pack(side='right', fill='y')
         
-        self.listbox_merge_files = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
+        self.listbox_merge_files = tk.Listbox(frame_list, selectmode='multiple', yscrollcommand=scrollbar.set)
         self.listbox_merge_files.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.listbox_merge_files.yview)
         
         frame_buttons = ttk.Frame(frame_files)
         frame_buttons.pack(fill='x', pady=5)
         
-        btn_add_files = ttk.Button(frame_buttons, text="Добавить файлы", command=self.add_merge_files)
-        btn_add_files.pack(side='left', padx=5)
+        btn_add = ttk.Button(frame_buttons, text="Добавить файлы", command=self.add_merge_files)
+        btn_add.pack(side='left', padx=5)
         
-        btn_clear_files = ttk.Button(frame_buttons, text="Очистить список", command=self.clear_merge_files)
-        btn_clear_files.pack(side='left', padx=5)
+        btn_remove = ttk.Button(frame_buttons, text="Удалить выбранные", command=self.remove_merge_files)
+        btn_remove.pack(side='left', padx=5)
         
         frame_settings = ttk.LabelFrame(self.tab_merge, text="Настройки объединения")
         frame_settings.pack(fill='x', padx=10, pady=5)
@@ -1012,12 +1020,10 @@ class GUI:
         
         ttk.Label(frame_mask, text="Маска:").pack(side='left', padx=5)
         
-        masks = ["none"] + self.processor.get_masks()  # Добавляем опцию "без маски"
-        self.combo_merge_mask = ttk.Combobox(frame_mask, values=masks, state="readonly")
+        self.combo_merge_mask = ttk.Combobox(frame_mask, values=self.processor.get_masks(), state="readonly")
         self.combo_merge_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_merge_mask.set(self.processor.config['default_mask'])
         
-        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -1039,7 +1045,7 @@ class GUI:
         btn_merge = ttk.Button(self.tab_merge, text="Объединить файлы", command=self.merge_selected_files)
         btn_merge.pack(pady=10)
         
-        frame_log = ttk.LabelFrame(self.tab_merge, text="Лог обработки")
+        frame_log = ttk.LabelFrame(self.tab_merge, text="Лог объединения")
         frame_log.pack(fill='both', expand=True, padx=10, pady=5)
         
         scrollbar_log = ttk.Scrollbar(frame_log)
