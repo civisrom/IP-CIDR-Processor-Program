@@ -15,7 +15,7 @@ import platform
 class IPCIDRProcessor:
     def __init__(self):
             self.ip_pattern_v4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b')
-            self.ip_pattern_v6 = re.compile(r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}/\d{1,3}\b|(?:[0-9a-fA-F]{1,4}:){0,7}[0-9a-fA-F]{1,4}/\d{1,3}\b')
+            self.ip_pattern_v6 = re.compile(r'(?:(?:[0-9a-fA-F]{1,4}:){0,7}(?::[0-9a-fA-F]{1,4}){0,7}|(?:[0-9a-fA-F]{1,4}:){0,6}:(?::[0-9a-fA-F]{1,4}){0,6})/\d{1,3}')
             self.config_file = 'ip_cidr_config.yaml'
             self.output_folder = 'output'
             self.default_config = {
@@ -70,12 +70,10 @@ class IPCIDRProcessor:
     
     def extract_ips(self, text):
         """Extract and validate IP addresses in CIDR format from text"""
-        # Find potential IP CIDRs with regex first
         potential_ips_v4 = self.ip_pattern_v4.findall(text)
         potential_ips_v6 = self.ip_pattern_v6.findall(text)
         potential_ips = potential_ips_v4 + potential_ips_v6
         
-        # Validate each IP CIDR
         valid_ips = []
         for ip_cidr in potential_ips:
             if self.validate_ip_cidr(ip_cidr):
