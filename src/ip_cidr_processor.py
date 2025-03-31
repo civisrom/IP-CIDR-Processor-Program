@@ -56,21 +56,139 @@ class IPCIDRProcessor:
             print(f"Ошибка при сохранении конфигурации: {e}")
             return False
 
+    def validate_ip_cidr(self, ip_cidr):
+        """Validate if a string is a valid IP CIDR notation"""
+        try:
+            ipaddress.ip_network(ip_cidr, strict=False)
+            return True
+        except ValueError:
+            return False
+    
     def extract_ips(self, text):
-        """Извлечение IP-адресов в CIDR формате из текста"""
-        ips_v4 = self.ip_pattern_v4.findall(text)
-        ips_v6 = self.ip_pattern_v6.findall(text)
-        return ips_v4 + ips_v6
+        """Extract and validate IP addresses in CIDR format from text"""
+        # Find potential IP CIDRs with regex first
+        potential_ips_v4 = self.ip_pattern_v4.findall(text)
+        potential_ips_v6 = self.ip_pattern_v6.findall(text)
+        potential_ips = potential_ips_v4 + potential_ips_v6
+        
+        # Validate each IP CIDR
+        valid_ips = []
+        for ip_cidr in potential_ips:
+            if self.validate_ip_cidr(ip_cidr):
+                valid_ips.append(ip_cidr)
+        
+        return valid_ips
 
     def process_file(self, file_path):
-        """Обработка файла и извлечение IP-адресов"""
+        """Process file and extract IP addresses"""
         try:
+            # Check if file exists
+            if not os.path.exists(file_path):
+                print(f"Файл не найден: {file_path}")
+                return []
+                
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
-            return self.extract_ips(content)
+            
+            ips = self.extract_ips(content)
+            
+            # Sort IPs for consistent output
+            sorted_ips = self.sort_ip_addresses(ips)
+            return sorted_ips
         except Exception as e:
             print(f"Ошибка при обработке файла {file_path}: {e}")
             return []
+    
+    def sort_ip_addresses(self, ip_list):
+        """Sort IP addresses for consistent output"""
+        # Separate IPv4 and IPv6 addresses
+        ipv4_list = []
+        ipv6_list = []
+        
+        for ip_cidr in ip_list:
+            try:
+                network = ipaddress.ip_network(ip_cidr, strict=False)
+                if network.version == 4:
+                    ipv4_list.append(ip_cidr)
+                else:
+                    ipv6_list.append(ip_cidr)
+            except ValueError:
+                # Skip invalid IP addresses
+                continue
+        
+        # Sort each list
+        sorted_ipv4 = sorted(ipv4_list, key=lambda ip: ipaddress.IPv4Network(ip, strict=False))
+        sorted_ipv6 = sorted(ipv6_list, key=lambda ip: ipaddress.IPv6Network(ip, strict=False))
+        
+        # Return combined list with IPv4 addresses first, then IPv6
+        return sorted_ipv4 + sorted_ipv6
+    
+    def optimize_ip_ranges(self, ip_list):
+        """Consolidate overlapping CIDR ranges where possible"""
+        if not ip_list:
+            return []
+            
+        # Separate IPv4 and IPv6
+        ipv4_networks = []
+        ipv6_networks = []
+        
+        for ip_cidr in ip_list:
+            try:
+                network = ipaddress.ip_network(ip_cidr, strict=False)
+                if network.version == 4:
+                    ipv4_networks.append(network)
+                else:
+                    ipv6_networks.append(network)
+            except ValueError:
+                continue
+        
+        # Process IPv4 and IPv6 separately
+        optimized_ipv4 = self._consolidate_networks(ipv4_networks)
+        optimized_ipv6 = self._consolidate_networks(ipv6_networks)
+        
+        # Convert back to strings
+        result = [str(net) for net in optimized_ipv4 + optimized_ipv6]
+        return result
+    
+    def _consolidate_networks(self, networks):
+        """Helper method to consolidate networks of the same version"""
+        if not networks:
+            return []
+            
+        # Sort networks
+        sorted_nets = sorted(networks, key=lambda net: (net.network_address, net.prefixlen))
+        
+        # Try to merge adjacent networks
+        optimized = [sorted_nets[0]]
+        
+        for current in sorted_nets[1:]:
+            last = optimized[-1]
+            
+            # Check if current network is a subset of the last one
+            if current.subnet_of(last):
+                continue
+                
+            # Check if networks can be merged
+            if (last.network_address <= current.network_address and 
+                last.broadcast_address >= current.broadcast_address):
+                # Current is already covered
+                continue
+                
+            # Try to find a supernet
+            if current.prefixlen == last.prefixlen:
+                try:
+                    # Check if they're adjacent and can be combined
+                    supernet = ipaddress.ip_network(f"{last.network_address}/{last.prefixlen-1}", strict=False)
+                    if (supernet.network_address <= last.network_address and 
+                        supernet.broadcast_address >= current.broadcast_address):
+                        optimized[-1] = supernet
+                        continue
+                except ValueError:
+                    pass
+                    
+            optimized.append(current)
+            
+        return optimized
 
     def download_file(self, url):
         """Загрузка файла по URL"""
@@ -172,17 +290,18 @@ class ConsoleUI:
         print()
     
     def main_menu(self):
-        """Главное меню программы"""
+        """Main menu of the program"""
         while True:
             self.print_header()
             print("Главное меню:")
             print("1. Обработать локальные файлы")
             print("2. Скачать и обработать файлы по URL")
             print("3. Объединить файлы")
-            print("4. Настройки масок")
-            print("5. Выход")
+            print("4. Оптимизировать IP диапазоны")
+            print("5. Настройки масок")
+            print("6. Выход")
             
-            choice = input("\nВыберите действие (1-5): ")
+            choice = input("\nВыберите действие (1-6): ")
             
             if choice == '1':
                 self.process_local_files()
@@ -191,13 +310,69 @@ class ConsoleUI:
             elif choice == '3':
                 self.merge_files()
             elif choice == '4':
-                self.mask_settings()
+                self.optimize_ip_ranges_menu()
             elif choice == '5':
+                self.mask_settings()
+            elif choice == '6':
                 print("Выход из программы...")
                 break
             else:
-                print("Неверный выбор. Пожалуйста, введите число от 1 до 5.")
+                print("Неверный выбор. Пожалуйста, введите число от 1 до 6.")
                 input("Нажмите Enter для продолжения...")
+    
+    def optimize_ip_ranges_menu(self):
+        """Menu for optimizing IP ranges"""
+        self.print_header()
+        print("Оптимизация IP диапазонов:")
+        print("Укажите путь к файлу с IP адресами в CIDR формате.")
+        file_path = input("Путь к файлу: ").strip()
+        
+        if not file_path:
+            print("Не указан путь к файлу.")
+            input("Нажмите Enter для продолжения...")
+            return
+            
+        if not os.path.exists(file_path) or not os.path.isfile(file_path):
+            print(f"Файл не найден: {file_path}")
+            input("Нажмите Enter для продолжения...")
+            return
+            
+        ips = self.processor.process_file(file_path)
+        if not ips:
+            print("IP-адреса в CIDR формате не найдены.")
+            input("Нажмите Enter для продолжения...")
+            return
+            
+        print(f"Найдено {len(ips)} IP-адресов в CIDR формате.")
+        
+        # Optimize ranges
+        optimized_ips = self.processor.optimize_ip_ranges(ips)
+        print(f"После оптимизации: {len(optimized_ips)} IP-адресов.")
+        
+        # Select mask
+        masks = self.processor.get_masks()
+        print("\nДоступные маски:")
+        for i, mask in enumerate(masks):
+            print(f"{i+1}. {mask}")
+        
+        mask_choice = input(f"\nВыберите маску (1-{len(masks)}) или оставьте пустым для маски по умолчанию: ")
+        selected_mask = None
+        if mask_choice.strip() and mask_choice.isdigit() and 1 <= int(mask_choice) <= len(masks):
+            selected_mask = masks[int(mask_choice) - 1]
+        else:
+            selected_mask = self.processor.config['default_mask']
+        
+        # Save optimized IPs
+        output_file = input("Введите имя выходного файла (по умолчанию: optimized_ips.txt): ")
+        if not output_file.strip():
+            output_file = "optimized_ips.txt"
+        output_path = os.path.join(self.processor.output_folder, output_file)
+        
+        success = self.processor.save_results(optimized_ips, output_path, selected_mask)
+        if success:
+            print(f"Оптимизированные IP-адреса сохранены в файл: {output_path}")
+        
+        input("\nНажмите Enter для продолжения...")
     
     def process_local_files(self):
         """Обработка локальных файлов"""
