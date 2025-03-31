@@ -1147,11 +1147,14 @@ class GUI:
         }
         separator = separators.get(separator_type, "\n")
         
+        # Выносим замену вне f-строки
+        separator_display = separator.replace('\n', '\\n')
+        
         example_ip1 = "192.168.1.0/24"
         example_ip2 = "2001:db8::/32"
         
         self.label_example1.config(text=f"IPv4: {prefix}{example_ip1}{suffix}")
-        self.label_example2.config(text=f"IPv6: {prefix}{example_ip2}{suffix} (разделитель: '{separator.replace('\n', '\\n')}' между записями)")
+        self.label_example2.config(text=f"IPv6: {prefix}{example_ip2}{suffix} (разделитель: '{separator_display}' между записями)")
     
     def start(self):
         """Запуск графического интерфейса"""
