@@ -480,27 +480,22 @@ class IPCIDRProcessor:
         """Подсчет количества IP-адресов в CIDR"""
         try:
             network = ipaddress.ip_network(cidr, strict=False)
-            # Для IPv4 возвращаем число хостов (без network и broadcast адресов)
-            if network.version == 4 and network.num_addresses > 2:
-                return network.num_addresses - 2
-            # Для IPv6 и малых сетей IPv4 возвращаем все адреса
+            # Для IPv4 возвращаем число адресов
             return network.num_addresses
         except ValueError as e:
             print(f"Ошибка при подсчете IP в CIDR {cidr}: {e}")
-            return 0
+            raise
     
     def check_cidr_overlap(self, cidr1, cidr2):
         """Проверка пересечения двух CIDR"""
         try:
             net1 = ipaddress.ip_network(cidr1, strict=False)
             net2 = ipaddress.ip_network(cidr2, strict=False)
-            # Проверяем, пересекаются ли сети
-            return not (net1.subnet_of(net2) or net2.subnet_of(net1) or 
-                       (net1.network_address > net2.broadcast_address) or 
-                       (net2.network_address > net1.broadcast_address))
+            # Проверка пересечения - используем встроенный метод overlaps
+            return net1.overlaps(net2)
         except ValueError as e:
             print(f"Ошибка при проверке пересечения CIDR {cidr1} и {cidr2}: {e}")
-            return False
+            raise
 
 class ConsoleUI:
     def __init__(self, processor):
@@ -1947,12 +1942,16 @@ class GUI:
             messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
             return
         
+        # Проверяем, есть ли в вводе CIDR-записи
+        cidrs = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b', input_text)
+        if not cidrs:
+            # Если CIDR не найдены, пробуем искать IP-адреса
+            ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', input_text)
+            if ips:
+                self.text_ip_output.insert(tk.END, "CIDR не найдены, найдены только IP-адреса\n")
+        
         output_file = self.entry_ip_output.get().strip()
         output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
-        
-        # Получаем значения опций
-        count_ips = self.var_count_ips.get()
-        compare_cidr = self.entry_compare_cidr.get().strip()
         
         # Обработка ввода
         ips, saved = self.processor.process_input_to_ips(input_text, output_path)
@@ -1961,32 +1960,44 @@ class GUI:
             self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
             
             # Если включена опция подсчета IP в CIDR
-            if count_ips:
-                cidrs = self.processor.extract_ips(input_text)
-                for cidr in cidrs:
-                    try:
-                        count = self.processor.count_ips_in_cidr(cidr)
-                        self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
-                    except Exception as e:
-                        self.text_ip_output.insert(tk.END, f"Ошибка при подсчете IP для {cidr}: {str(e)}\n")
+            if self.var_count_ips.get():
+                # Непосредственно выделяем CIDR из ввода
+                cidrs = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b', input_text)
+                if cidrs:
+                    self.text_ip_output.insert(tk.END, "Подсчет IP в CIDR:\n")
+                    for cidr in cidrs:
+                        try:
+                            count = self.processor.count_ips_in_cidr(cidr)
+                            self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
+                        except Exception as e:
+                            self.text_ip_output.insert(tk.END, f"Ошибка при подсчете IP для {cidr}: {str(e)}\n")
+                else:
+                    self.text_ip_output.insert(tk.END, "CIDR не найдены для подсчета IP\n")
             
             # Если указан CIDR для сравнения
+            compare_cidr = self.entry_compare_cidr.get().strip()
             if compare_cidr:
                 try:
                     # Проверяем, является ли строка корректным CIDR
-                    test_network = ipaddress.ip_network(compare_cidr, strict=False)
+                    ipaddress.ip_network(compare_cidr, strict=False)
                     
-                    cidrs = self.processor.extract_ips(input_text)
-                    for cidr in cidrs:
-                        try:
-                            overlap = self.processor.check_cidr_overlap(cidr, compare_cidr)
-                            self.text_ip_output.insert(tk.END, f"Пересечение {cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
-                        except Exception as e:
-                            self.text_ip_output.insert(tk.END, f"Ошибка при проверке пересечения {cidr} с {compare_cidr}: {str(e)}\n")
+                    # Непосредственно выделяем CIDR из ввода
+                    cidrs = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b', input_text)
+                    if cidrs:
+                        self.text_ip_output.insert(tk.END, "Сравнение с указанным CIDR:\n")
+                        for cidr in cidrs:
+                            try:
+                                overlap = self.processor.check_cidr_overlap(cidr, compare_cidr)
+                                self.text_ip_output.insert(tk.END, f"Пересечение {cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
+                            except Exception as e:
+                                self.text_ip_output.insert(tk.END, f"Ошибка при проверке пересечения {cidr} с {compare_cidr}: {str(e)}\n")
+                    else:
+                        self.text_ip_output.insert(tk.END, "CIDR не найдены для сравнения\n")
                 except ValueError:
                     self.text_ip_output.insert(tk.END, f"Ошибка: {compare_cidr} не является корректным CIDR\n")
             
             # Выводим первые 100 IP
+            self.text_ip_output.insert(tk.END, "\nСписок IP-адресов:\n")
             self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
             if len(ips) > 100:
                 self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
