@@ -1983,7 +1983,8 @@ class GUI:
                 compare_cidrs = [cidr.strip() for cidr in compare_cidrs if cidr.strip()]
                 
                 if compare_cidrs:
-                    self.text_ip_output.insert(tk.END, "\nСравнение с указанными CIDR:\n")
+                    self.text_ip_output.insert(tk.END, "\nПересечения с указанными CIDR:\n")
+                    has_overlaps = False
                     
                     # Непосредственно выделяем CIDR из основного ввода
                     input_cidrs = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b', input_text)
@@ -2005,13 +2006,20 @@ class GUI:
                                     
                                     try:
                                         overlap = self.processor.check_cidr_overlap(input_cidr, compare_cidr)
-                                        self.text_ip_output.insert(tk.END, 
-                                            f"Пересечение {input_cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
+                                        # Выводим только случаи, когда есть пересечение (результат "Да")
+                                        if overlap:
+                                            self.text_ip_output.insert(tk.END, 
+                                                f"Пересечение {input_cidr} с {compare_cidr}: Да\n")
+                                            has_overlaps = True
                                     except Exception as e:
                                         self.text_ip_output.insert(tk.END, 
                                             f"Ошибка при проверке пересечения {input_cidr} с {compare_cidr}: {str(e)}\n")
                                 except ValueError:
                                     self.text_ip_output.insert(tk.END, f"Ошибка: {compare_cidr} не является корректным CIDR\n")
+                        
+                        # Если не найдено ни одного пересечения
+                        if not has_overlaps:
+                            self.text_ip_output.insert(tk.END, "Пересечений не найдено\n")
                     else:
                         self.text_ip_output.insert(tk.END, "CIDR не найдены в основном вводе для сравнения\n")
                 else:
