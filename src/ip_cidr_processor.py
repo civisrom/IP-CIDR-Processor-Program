@@ -480,17 +480,26 @@ class IPCIDRProcessor:
         """Подсчет количества IP-адресов в CIDR"""
         try:
             network = ipaddress.ip_network(cidr, strict=False)
+            # Для IPv4 возвращаем число хостов (без network и broadcast адресов)
+            if network.version == 4 and network.num_addresses > 2:
+                return network.num_addresses - 2
+            # Для IPv6 и малых сетей IPv4 возвращаем все адреса
             return network.num_addresses
-        except ValueError:
+        except ValueError as e:
+            print(f"Ошибка при подсчете IP в CIDR {cidr}: {e}")
             return 0
-        
+    
     def check_cidr_overlap(self, cidr1, cidr2):
         """Проверка пересечения двух CIDR"""
         try:
             net1 = ipaddress.ip_network(cidr1, strict=False)
             net2 = ipaddress.ip_network(cidr2, strict=False)
-            return net1.overlaps(net2)
-        except ValueError:
+            # Проверяем, пересекаются ли сети
+            return not (net1.subnet_of(net2) or net2.subnet_of(net1) or 
+                       (net1.network_address > net2.broadcast_address) or 
+                       (net2.network_address > net1.broadcast_address))
+        except ValueError as e:
+            print(f"Ошибка при проверке пересечения CIDR {cidr1} и {cidr2}: {e}")
             return False
 
 class ConsoleUI:
@@ -1897,68 +1906,92 @@ class GUI:
         """Настройка вкладки для разложения IP"""
         frame_input = ttk.LabelFrame(self.tab_ip_expansion, text="Ввод CIDR или диапазона")
         frame_input.pack(fill='both', expand=True, padx=10, pady=5)
-
         self.text_ip_input = tk.Text(frame_input, height=5)
         self.text_ip_input.pack(fill='both', expand=True, padx=5, pady=5)
-
+        
         frame_settings = ttk.LabelFrame(self.tab_ip_expansion, text="Настройки")
         frame_settings.pack(fill='x', padx=10, pady=5)
-
+        
         ttk.Label(frame_settings, text="Выходной файл:").pack(side='left', padx=5)
         self.entry_ip_output = ttk.Entry(frame_settings)
         self.entry_ip_output.pack(side='left', fill='x', expand=True, padx=5)
         self.entry_ip_output.insert(0, "expanded_ips.txt")
-
-        btn_process = ttk.Button(frame_settings, text="Разложить IP", command=self.expand_ips)
-        btn_process.pack(side='left', padx=5)
-
-        frame_output = ttk.LabelFrame(self.tab_ip_expansion, text="Результат")
-        frame_output.pack(fill='both', expand=True, padx=10, pady=5)
-
-        scrollbar = ttk.Scrollbar(frame_output)
-        scrollbar.pack(side='right', fill='y')
-        self.text_ip_output = tk.Text(frame_output, yscrollcommand=scrollbar.set, height=10)
-        self.text_ip_output.pack(fill='both', expand=True)
-        scrollbar.config(command=self.text_ip_output.yview)
-
+        
+        # Добавляем опции анализа
         frame_analysis = ttk.Frame(frame_settings)
         frame_analysis.pack(fill='x', pady=5)
-
+        
         self.var_count_ips = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame_analysis, text="Подсчитать IP", variable=self.var_count_ips).pack(side='left', padx=5)
         
         ttk.Label(frame_analysis, text="Сравнить с CIDR:").pack(side='left', padx=5)
         self.entry_compare_cidr = ttk.Entry(frame_analysis, width=20)
         self.entry_compare_cidr.pack(side='left', padx=5)
+        
+        btn_process = ttk.Button(frame_settings, text="Разложить IP", command=self.expand_ips)
+        btn_process.pack(side='left', padx=5)
+        
+        frame_output = ttk.LabelFrame(self.tab_ip_expansion, text="Результат")
+        frame_output.pack(fill='both', expand=True, padx=10, pady=5)
+        scrollbar = ttk.Scrollbar(frame_output)
+        scrollbar.pack(side='right', fill='y')
+        self.text_ip_output = tk.Text(frame_output, yscrollcommand=scrollbar.set, height=10)
+        self.text_ip_output.pack(fill='both', expand=True)
+        scrollbar.config(command=self.text_ip_output.yview)
 
     def expand_ips(self):
+        """Разложение введенных CIDR и диапазонов"""
         self.text_ip_output.delete(1.0, tk.END)
         input_text = self.text_ip_input.get("1.0", tk.END).strip()
         if not input_text:
             messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
             return
-
+        
         output_file = self.entry_ip_output.get().strip()
         output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
+        
+        # Получаем значения опций
         count_ips = self.var_count_ips.get()
         compare_cidr = self.entry_compare_cidr.get().strip()
-
+        
+        # Обработка ввода
         ips, saved = self.processor.process_input_to_ips(input_text, output_path)
         
         if ips:
             self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
+            
+            # Если включена опция подсчета IP в CIDR
             if count_ips:
                 cidrs = self.processor.extract_ips(input_text)
                 for cidr in cidrs:
-                    count = self.processor.count_ips_in_cidr(cidr)
-                    self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
-            if compare_cidr and self.processor.validate_ip_cidr(compare_cidr):
-                for cidr in self.processor.extract_ips(input_text):
-                    overlap = self.processor.check_cidr_overlap(cidr, compare_cidr)
-                    self.text_ip_output.insert(tk.END, f"Пересечение {cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
+                    try:
+                        count = self.processor.count_ips_in_cidr(cidr)
+                        self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
+                    except Exception as e:
+                        self.text_ip_output.insert(tk.END, f"Ошибка при подсчете IP для {cidr}: {str(e)}\n")
+            
+            # Если указан CIDR для сравнения
+            if compare_cidr:
+                try:
+                    # Проверяем, является ли строка корректным CIDR
+                    test_network = ipaddress.ip_network(compare_cidr, strict=False)
+                    
+                    cidrs = self.processor.extract_ips(input_text)
+                    for cidr in cidrs:
+                        try:
+                            overlap = self.processor.check_cidr_overlap(cidr, compare_cidr)
+                            self.text_ip_output.insert(tk.END, f"Пересечение {cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
+                        except Exception as e:
+                            self.text_ip_output.insert(tk.END, f"Ошибка при проверке пересечения {cidr} с {compare_cidr}: {str(e)}\n")
+                except ValueError:
+                    self.text_ip_output.insert(tk.END, f"Ошибка: {compare_cidr} не является корректным CIDR\n")
+            
+            # Выводим первые 100 IP
             self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
             if len(ips) > 100:
                 self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
+            
+            # Если файл был сохранен
             if saved:
                 self.text_ip_output.insert(tk.END, f"\nВсе IP сохранены в: {output_path}")
         else:
