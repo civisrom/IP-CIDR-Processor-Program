@@ -922,14 +922,25 @@ class GUI:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Вкладки
+        # Определяем все вкладки
         self.tab_local = ttk.Frame(self.notebook)
         self.tab_url = ttk.Frame(self.notebook)
         self.tab_merge = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
-
         self.tab_ip_expansion = ttk.Frame(self.notebook)
+        
+        # Добавляем вкладки в notebook
+        self.notebook.add(self.tab_local, text="Локальные файлы")
+        self.notebook.add(self.tab_url, text="URL файлы")
+        self.notebook.add(self.tab_merge, text="Объединение")
+        self.notebook.add(self.tab_settings, text="Настройки")
         self.notebook.add(self.tab_ip_expansion, text="Разложение IP")
+        
+        # Настраиваем интерфейс для каждой вкладки
+        self.setup_local_tab()
+        self.setup_url_tab()
+        self.setup_merge_tab()
+        self.setup_settings_tab()
         self.setup_ip_expansion_tab()
 
     def setup_ip_expansion_tab(self):
@@ -951,6 +962,17 @@ class GUI:
         btn_process = ttk.Button(frame_settings, text="Разложить IP", command=self.expand_ips)
         btn_process.pack(side='left', padx=5)
 
+        # Добавляем опции анализа
+        frame_analysis = ttk.Frame(frame_settings)
+        frame_analysis.pack(fill='x', pady=5)
+        
+        self.var_count_ips = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_analysis, text="Подсчитать IP", variable=self.var_count_ips).pack(side='left', padx=5)
+        
+        ttk.Label(frame_analysis, text="Сравнить с CIDR:").pack(side='left', padx=5)
+        self.entry_compare_cidr = ttk.Entry(frame_analysis, width=20)
+        self.entry_compare_cidr.pack(side='left', padx=5)
+
         frame_output = ttk.LabelFrame(self.tab_ip_expansion, text="Результат")
         frame_output.pack(fill='both', expand=True, padx=10, pady=5)
 
@@ -970,29 +992,29 @@ class GUI:
 
         output_file = self.entry_ip_output.get().strip()
         output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
+        count_ips = self.var_count_ips.get()
+        compare_cidr = self.entry_compare_cidr.get().strip()
 
         ips, saved = self.processor.process_input_to_ips(input_text, output_path)
         
         if ips:
             self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
-            self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))  # Показываем первые 100 для экономии ресурсов
+            if count_ips:
+                cidrs = self.processor.extract_ips(input_text)
+                for cidr in cidrs:
+                    count = self.processor.count_ips_in_cidr(cidr)
+                    self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
+            if compare_cidr and self.processor.validate_ip_cidr(compare_cidr):
+                for cidr in self.processor.extract_ips(input_text):
+                    overlap = self.processor.check_cidr_overlap(cidr, compare_cidr)
+                    self.text_ip_output.insert(tk.END, f"Пересечение {cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
+            self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
             if len(ips) > 100:
                 self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
             if saved:
                 self.text_ip_output.insert(tk.END, f"\nВсе IP сохранены в: {output_path}")
         else:
             self.text_ip_output.insert(tk.END, "IP-адреса не найдены")
-
-        self.notebook.add(self.tab_local, text="Локальные файлы")
-        self.notebook.add(self.tab_url, text="URL файлы")
-        self.notebook.add(self.tab_merge, text="Объединение")
-        self.notebook.add(self.tab_settings, text="Настройки")
-        
-        # Создаем интерфейс для каждой вкладки
-        self.setup_local_tab()
-        self.setup_url_tab()
-        self.setup_merge_tab()
-        self.setup_settings_tab()
     
     def setup_local_tab(self):
         frame_files = ttk.LabelFrame(self.tab_local, text="Выбор файлов")
@@ -1940,120 +1962,72 @@ class GUI:
             return all_ips, True
         return all_ips, False
 
-    def setup_ip_expansion_tab(self):
-        # Существующий код...
-        # Добавляем опции анализа
-        frame_analysis = ttk.Frame(frame_settings)
-        frame_analysis.pack(fill='x', pady=5)
-        
-        self.var_count_ips = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame_analysis, text="Подсчитать IP", variable=self.var_count_ips).pack(side='left', padx=5)
-        
-        ttk.Label(frame_analysis, text="Сравнить с CIDR:").pack(side='left', padx=5)
-        self.entry_compare_cidr = ttk.Entry(frame_analysis, width=20)
-        self.entry_compare_cidr.pack(side='left', padx=5)
-
-    def expand_ips(self):
-        self.text_ip_output.delete(1.0, tk.END)
-        input_text = self.text_ip_input.get("1.0", tk.END).strip()
-        if not input_text:
-            messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
-            return
-
-        output_file = self.entry_ip_output.get().strip()
-        output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
-        count_ips = self.var_count_ips.get()
-        compare_cidr = self.entry_compare_cidr.get().strip()
-
-        ips, saved = self.processor.process_input_to_ips(input_text, output_path)
-        
-        if ips:
-            self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
-            if count_ips:
-                cidrs = self.processor.extract_ips(input_text)
-                for cidr in cidrs:
-                    count = self.processor.count_ips_in_cidr(cidr)
-                    self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
-            if compare_cidr and self.processor.validate_ip_cidr(compare_cidr):
-                for cidr in self.processor.extract_ips(input_text):
-                    overlap = self.processor.check_cidr_overlap(cidr, compare_cidr)
-                    self.text_ip_output.insert(tk.END, f"Пересечение {cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
-            self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
-            if len(ips) > 100:
-                self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
-            if saved:
-                self.text_ip_output.insert(tk.END, f"\nВсе IP сохранены в: {output_path}")
-        else:
-            self.text_ip_output.insert(tk.END, "IP-адреса не найдены")
 
 def main():
     """Основная функция программы"""
     processor = IPCIDRProcessor()
     
-    # Проверяем, есть ли аргументы командной строки
     if len(sys.argv) > 1:
-            parser = argparse.ArgumentParser(
-                description='IP CIDR Processor - Обработка IP-адресов в CIDR формате',
-                epilog='''
-                Примеры использования:
-                  python script.py file1.txt file2.txt -o output.txt -m clash
-                    - Обработать два файла и сохранить с маской "clash".
-                  python script.py https://example.com/ips.txt -o ips.txt
-                    - Скачать и обработать IP из URL.
-                  python script.py file1.txt file2.txt --merge -o merged.txt
-                    - Объединить IP из файлов в один выходной файл.
-                  python script.py --gui
-                    - Запустить графический интерфейс.
+        parser = argparse.ArgumentParser(
+            description='IP CIDR Processor - Обработка IP-адресов в CIDR формате',
+            epilog='''
+            Примеры использования:
+              python script.py file1.txt file2.txt -o output.txt -m clash
+                - Обработать два файла и сохранить с маской "clash".
+              python script.py https://example.com/ips.txt -o ips.txt
+                - Скачать и обработать IP из URL.
+              python script.py file1.txt file2.txt --merge -o merged.txt
+                - Объединить IP из файлов в один выходной файл.
+              python script.py --gui
+                - Запустить графический интерфейс.
     
-                Полезные команды Linux для работы с терминалом:
-                  ls -l -> dir (Windows) - Показать список файлов.
-                  cat file.txt - Просмотр содержимого файла (type file.txt в Windows).
-                  grep "pattern" file.txt - Поиск в файле (findstr в Windows).
-                  python script.py file.txt > output.txt - Перенаправить вывод в файл.
-                  python script.py file.txt 2> errors.txt - Перенаправить ошибки в файл.
-                  python script.py file.txt | tee output.txt - Просмотр и сохранение вывода.
-                ''',
-                formatter_class=argparse.RawDescriptionHelpFormatter
-            )
-            parser.add_argument('files', nargs='*', help='Файлы или URL для обработки (локальные пути или http/https ссылки)')
-            parser.add_argument('-o', '--output', help='Имя выходного файла (по умолчанию: output_ips.txt)')
-            parser.add_argument('-m', '--mask', help='Имя маски для применения (см. конфигурацию в ip_cidr_config.yaml)')
-            parser.add_argument('--merge', action='store_true', help='Объединить все IP-адреса из файлов в один выходной файл')
-            parser.add_argument('--gui', action='store_true', help='Запустить графический интерфейс')
-            
-            args = parser.parse_args()
+            Полезные команды Linux для работы с терминалом:
+              ls -l -> dir (Windows) - Показать список файлов.
+              cat file.txt - Просмотр содержимого файла (type file.txt в Windows).
+              grep "pattern" file.txt - Поиск в файле (findstr в Windows).
+              python script.py file.txt > output.txt - Перенаправить вывод в файл.
+              python script.py file.txt 2> errors.txt - Перенаправить ошибки в файл.
+              python script.py file.txt | tee output.txt - Просмотр и сохранение вывода.
+            ''',
+            formatter_class=argparse.RawDescriptionHelpFormatter
+        )
+        parser.add_argument('files', nargs='*', help='Файлы или URL для обработки (локальные пути или http/https ссылки)')
+        parser.add_argument('-o', '--output', help='Имя выходного файла (по умолчанию: output_ips.txt)')
+        parser.add_argument('-m', '--mask', help='Имя маски для применения (см. конфигурацию в ip_cidr_config.yaml)')
+        parser.add_argument('--merge', action='store_true', help='Объединить все IP-адреса из файлов в один выходной файл')
+        parser.add_argument('--gui', action='store_true', help='Запустить графический интерфейс')
         
-            if args.gui:
-                # Запускаем GUI
-                gui = GUI(processor)
-                gui.start()
-            else:
-                # Обработка в командной строке
-                if not args.files:
-                    print("Не указаны файлы для обработки")
-                    return
+        args = parser.parse_args()
+        
+        if args.gui:
+            # Запускаем GUI
+            gui = GUI(processor)
+            gui.start()  # Явно вызываем start()
+        else:
+            # Обработка в командной строке
+            if not args.files:
+                print("Не указаны файлы для обработки")
+                return
             
-                all_ips = []
-                for file_path in args.files:
-                    if file_path.startswith(('http://', 'https://')):
-                        # Это URL
-                        print(f"Загрузка файла по URL: {file_path}")
-                        content = processor.download_file(file_path)
-                        if content:
-                            ips = processor.extract_ips(content)
-                            if ips:
-                                print(f"Найдено {len(ips)} IP-адресов в CIDR формате")
-                                all_ips.extend(ips)
+            all_ips = []
+            for file_path in args.files:
+                if file_path.startswith(('http://', 'https://')):
+                    print(f"Загрузка файла по URL: {file_path}")
+                    content = processor.download_file(file_path)
+                    if content:
+                        ips = processor.extract_ips(content)
+                        if ips:
+                            print(f"Найдено {len(ips)} IP-адресов в CIDR формате")
+                            all_ips.extend(ips)
+                else:
+                    if os.path.exists(file_path):
+                        print(f"Обработка файла: {file_path}")
+                        ips_dict = processor.process_file(file_path)
+                        if ips_dict['ipv4'] or ips_dict['ipv6']:
+                            print(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
+                            all_ips.extend(ips_dict['ipv4'] + ips_dict['ipv6'])
                     else:
-                        # Это локальный файл
-                        if os.path.exists(file_path):
-                            print(f"Обработка файла: {file_path}")
-                            ips = processor.process_file(file_path)
-                            if ips:
-                                print(f"Найдено {len(ips)} IP-адресов в CIDR формате")
-                                all_ips.extend(ips)
-                        else:
-                            print(f"Файл не найден: {file_path}")
+                        print(f"Файл не найден: {file_path}")
             
             # Удаляем дубликаты
             all_ips = list(set(all_ips))
@@ -2063,18 +2037,16 @@ def main():
                 output_file = args.output if args.output else "output_ips.txt"
                 mask_name = args.mask if args.mask else processor.config['default_mask']
                 
-                if processor.save_results(all_ips, output_file, mask_name):
-                    print(f"Результаты сохранены в файл: {output_file}")
+                if args.merge:
+                    processor.merge_files(args.files, output_file, mask_name)
                 else:
-                    print("Ошибка при сохранении результатов")
+                    processor.save_results(all_ips, output_file, mask_name)
     else:
         # Запускаем интерактивное меню
         if platform.system() == "Linux" and "DISPLAY" not in os.environ:
-            # Если нет графической среды (например, в терминале)
             console_ui = ConsoleUI(processor)
             console_ui.main_menu()
         else:
-            # Пытаемся запустить GUI, если не получится - запускаем консольный интерфейс
             try:
                 gui = GUI(processor)
                 gui.start()
