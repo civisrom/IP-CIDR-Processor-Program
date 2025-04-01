@@ -1,7 +1,6 @@
 import os
 import re
 import sys
-import concurrent.futures
 import ipaddress
 from ipaddress import ip_network, ip_address
 import json
@@ -373,28 +372,16 @@ class IPCIDRProcessor:
         return False
 
     def merge_files(self, file_paths, output_file, mask_name=None):
-        """Объединение нескольких файлов в один с многопоточностью"""
+        """Объединение нескольких файлов в один с обработкой исключений"""
         all_ips = []
-        
-        def process_single_file(file_path):
-            try:
-                ips_dict = self.process_file(file_path)
-                return ips_dict['ipv4'] + ips_dict['ipv6']
-            except Exception as e:
-                print(f"Ошибка при обработке файла {file_path}: {e}")
-                return []
-
         try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Параллельная обработка файлов
-                future_to_file = {executor.submit(process_single_file, path): path for path in file_paths}
-                for future in concurrent.futures.as_completed(future_to_file):
-                    file_path = future_to_file[future]
-                    try:
-                        ips = future.result()
-                        all_ips.extend(ips)
-                    except Exception as e:
-                        print(f"Ошибка в потоке для файла {file_path}: {e}")
+            for file_path in file_paths:
+                try:
+                    ips_dict = self.process_file(file_path)
+                    all_ips.extend(ips_dict['ipv4'] + ips_dict['ipv6'])
+                except Exception as e:
+                    print(f"Ошибка при обработке файла {file_path}: {e}")
+                    continue
             
             if not all_ips:
                 print("Нет IP-адресов для объединения")
@@ -407,6 +394,87 @@ class IPCIDRProcessor:
         except Exception as e:
             print(f"Критическая ошибка при объединении файлов: {e}")
             return False
+
+    def expand_cidr(self, cidr, output_file=None):
+        """Разложение CIDR с потоковой записью в файл или возвратом ограниченного списка"""
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+            num_addresses = network.num_addresses
+            
+            # Ограничение: если CIDR слишком большой (> 65536 адресов), требуем файл
+            if num_addresses > 65536 and not output_file:
+                print(f"Слишком много адресов в {cidr} ({num_addresses}). Укажите файл для записи.")
+                return []
+            
+            if output_file:
+                with open(output_file, 'a', encoding='utf-8') as f:
+                    if num_addresses == 1:
+                        f.write(f"{network.network_address}\n")
+                    else:
+                        for ip in network.hosts():
+                            f.write(f"{ip}\n")
+                return [f"Сохранено в {output_file}"]
+            else:
+                # Для небольших CIDR возвращаем список
+                return [str(ip) for ip in network.hosts()] or [str(network.network_address)]
+        except ValueError as e:
+            print(f"Ошибка при разложении CIDR {cidr}: {e}")
+            return []
+
+    def expand_range(self, ip_range):
+        """Разложение диапазона IP-адресов (например, 192.168.1.1-192.168.1.10)"""
+        try:
+            start_ip, end_ip = ip_range.split('-')
+            start = ipaddress.ip_address(start_ip.strip())
+            end = ipaddress.ip_address(end_ip.strip())
+            if start.version != end.version:
+                raise ValueError("Версии IP не совпадают")
+            ip_list = []
+            current = start
+            while current <= end:
+                ip_list.append(str(current))
+                current = ipaddress.ip_address(int(current) + 1)
+            return ip_list
+        except ValueError as e:
+            print(f"Ошибка при разложении диапазона {ip_range}: {e}")
+            return []
+
+    def process_input_to_ips(self, input_text, output_file=None):
+        """Обработка текста с CIDR или диапазонами с потоковой записью"""
+        cidrs = self.extract_ips(input_text)
+        ranges = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}-(?:\d{1,3}\.){3}\d{1,3}\b', input_text)
+        
+        all_ips = []
+        saved = False
+        
+        if output_file and os.path.exists(output_file):
+            os.remove(output_file)  # Очищаем файл перед записью
+        
+        # Обработка CIDR
+        for cidr in cidrs:
+            ips = self.expand_cidr(cidr, output_file)
+            if output_file and ips and ips[0].startswith("Сохранено"):
+                saved = True
+            else:
+                all_ips.extend(ips)
+        
+        # Обработка диапазонов
+        for ip_range in ranges:
+            range_ips = self.expand_range(ip_range)
+            if output_file:
+                with open(output_file, 'a', encoding='utf-8') as f:
+                    for ip in range_ips:
+                        f.write(f"{ip}\n")
+                saved = True
+            else:
+                all_ips.extend(range_ips)
+        
+        all_ips = sorted(list(set(all_ips)), key=ipaddress.ip_address) if not output_file else all_ips
+        
+        if output_file and saved:
+            print(f"Все IP-адреса сохранены в файл: {output_file}")
+            return all_ips, True
+        return all_ips, False
 
     def count_ips_in_cidr(self, cidr):
         """Подсчет количества IP-адресов в CIDR"""
@@ -922,100 +990,26 @@ class GUI:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Определяем все вкладки
+        # Вкладки
         self.tab_local = ttk.Frame(self.notebook)
         self.tab_url = ttk.Frame(self.notebook)
         self.tab_merge = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
         self.tab_ip_expansion = ttk.Frame(self.notebook)
         
-        # Добавляем вкладки в notebook
         self.notebook.add(self.tab_local, text="Локальные файлы")
         self.notebook.add(self.tab_url, text="URL файлы")
         self.notebook.add(self.tab_merge, text="Объединение")
         self.notebook.add(self.tab_settings, text="Настройки")
         self.notebook.add(self.tab_ip_expansion, text="Разложение IP")
-        
-        # Настраиваем интерфейс для каждой вкладки
+
+        # Создаем интерфейс для каждой вкладки
         self.setup_local_tab()
         self.setup_url_tab()
         self.setup_merge_tab()
         self.setup_settings_tab()
         self.setup_ip_expansion_tab()
 
-    def setup_ip_expansion_tab(self):
-        """Настройка вкладки для разложения IP"""
-        frame_input = ttk.LabelFrame(self.tab_ip_expansion, text="Ввод CIDR или диапазона")
-        frame_input.pack(fill='both', expand=True, padx=10, pady=5)
-
-        self.text_ip_input = tk.Text(frame_input, height=5)
-        self.text_ip_input.pack(fill='both', expand=True, padx=5, pady=5)
-
-        frame_settings = ttk.LabelFrame(self.tab_ip_expansion, text="Настройки")
-        frame_settings.pack(fill='x', padx=10, pady=5)
-
-        ttk.Label(frame_settings, text="Выходной файл:").pack(side='left', padx=5)
-        self.entry_ip_output = ttk.Entry(frame_settings)
-        self.entry_ip_output.pack(side='left', fill='x', expand=True, padx=5)
-        self.entry_ip_output.insert(0, "expanded_ips.txt")
-
-        btn_process = ttk.Button(frame_settings, text="Разложить IP", command=self.expand_ips)
-        btn_process.pack(side='left', padx=5)
-
-        # Добавляем опции анализа
-        frame_analysis = ttk.Frame(frame_settings)
-        frame_analysis.pack(fill='x', pady=5)
-        
-        self.var_count_ips = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame_analysis, text="Подсчитать IP", variable=self.var_count_ips).pack(side='left', padx=5)
-        
-        ttk.Label(frame_analysis, text="Сравнить с CIDR:").pack(side='left', padx=5)
-        self.entry_compare_cidr = ttk.Entry(frame_analysis, width=20)
-        self.entry_compare_cidr.pack(side='left', padx=5)
-
-        frame_output = ttk.LabelFrame(self.tab_ip_expansion, text="Результат")
-        frame_output.pack(fill='both', expand=True, padx=10, pady=5)
-
-        scrollbar = ttk.Scrollbar(frame_output)
-        scrollbar.pack(side='right', fill='y')
-        self.text_ip_output = tk.Text(frame_output, yscrollcommand=scrollbar.set, height=10)
-        self.text_ip_output.pack(fill='both', expand=True)
-        scrollbar.config(command=self.text_ip_output.yview)
-
-    def expand_ips(self):
-        """Разложение введенных CIDR и диапазонов"""
-        self.text_ip_output.delete(1.0, tk.END)
-        input_text = self.text_ip_input.get("1.0", tk.END).strip()
-        if not input_text:
-            messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
-            return
-
-        output_file = self.entry_ip_output.get().strip()
-        output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
-        count_ips = self.var_count_ips.get()
-        compare_cidr = self.entry_compare_cidr.get().strip()
-
-        ips, saved = self.processor.process_input_to_ips(input_text, output_path)
-        
-        if ips:
-            self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
-            if count_ips:
-                cidrs = self.processor.extract_ips(input_text)
-                for cidr in cidrs:
-                    count = self.processor.count_ips_in_cidr(cidr)
-                    self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
-            if compare_cidr and self.processor.validate_ip_cidr(compare_cidr):
-                for cidr in self.processor.extract_ips(input_text):
-                    overlap = self.processor.check_cidr_overlap(cidr, compare_cidr)
-                    self.text_ip_output.insert(tk.END, f"Пересечение {cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
-            self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
-            if len(ips) > 100:
-                self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
-            if saved:
-                self.text_ip_output.insert(tk.END, f"\nВсе IP сохранены в: {output_path}")
-        else:
-            self.text_ip_output.insert(tk.END, "IP-адреса не найдены")
-    
     def setup_local_tab(self):
         frame_files = ttk.LabelFrame(self.tab_local, text="Выбор файлов")
         frame_files.pack(fill='both', expand=True, padx=10, pady=5)
@@ -1599,74 +1593,92 @@ class GUI:
                 self.log_url("Ошибка: пользовательский шаблон диапазона должен содержать {start} и {end}")
                 return
         
-        all_ips = {'ipv4': [], 'ipv6': []}
-        all_ranges = []
-        
-        def process_url(url):
-            self.log_url(f"Загрузка файла по URL: {url}")
-            content = self.processor.download_file(url)
-            if not content:
-                self.log_url(f"Ошибка при загрузке файла {url}")
-                return {'ipv4': [], 'ipv6': []}, []
-            
-            if use_ranges:
-                ips = self.processor.extract_ips(content)
-                ranges = [self.processor.format_range(*self.processor.cidr_to_range(ip), use_custom_range) for ip in ips]
-                return {'ipv4': [], 'ipv6': []}, ranges
-            else:
-                ips_dict = self.processor.process_file(file_path=None)  # Используем content напрямую
-                ips_dict = {'ipv4': [], 'ipv6': []}
-                for ip in self.processor.extract_ips(content):
-                    network = ipaddress.ip_network(ip, strict=False)
-                    if network.version == 4:
-                        ips_dict['ipv4'].append(ip)
-                    elif network.version == 6:
-                        ips_dict['ipv6'].append(ip)
-                return ips_dict, []
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future_to_url = {executor.submit(process_url, url): url for url in self.selected_urls}
-            for future in concurrent.futures.as_completed(future_to_url):
-                url = future_to_url[future]
-                try:
-                    ips_dict, ranges = future.result()
-                    if use_ranges:
-                        all_ranges.extend(ranges)
-                        if ranges and save_mode == "separate":
+        if use_ranges:
+            all_ranges = []
+            for url in self.selected_urls:
+                self.log_url(f"Загрузка файла по URL: {url}")
+                content = self.processor.download_file(url)
+                if content:
+                    ips = self.processor.extract_ips(content)
+                    ranges = []
+                    for ip in ips:
+                        start, end = self.processor.cidr_to_range(ip)
+                        ranges.append(self.processor.format_range(start, end, use_custom_range))
+                    if ranges:
+                        self.log_url(f"Найдено {len(ranges)} диапазонов")
+                        if save_mode == "separate":
                             url_parts = urlparse(url)
                             file_name = os.path.basename(url_parts.path) or url_parts.netloc.replace('.', '_') + ".txt"
                             output_path = os.path.join(self.processor.output_folder, f"range_url_{file_name}")
-                            with open(output_path, 'w', encoding='utf-8') as f:
-                                f.write('\n'.join(ranges))
-                            self.log_url(f"Диапазоны сохранены в файл: {output_path}")
+                            try:
+                                with open(output_path, 'w', encoding='utf-8') as f:
+                                    f.write('\n'.join(ranges))
+                                self.log_url(f"Диапазоны сохранены в файл: {output_path}")
+                            except Exception as e:
+                                self.log_url(f"Ошибка при сохранении: {e}")
+                        else:
+                            all_ranges.extend(ranges)
                     else:
+                        self.log_url("Диапазоны не найдены")
+                else:
+                    self.log_url("Ошибка при загрузке файла")
+            
+            if save_mode == "combined" and all_ranges:
+                all_ranges = list(set(all_ranges))
+                self.log_url(f"Всего уникальных диапазонов: {len(all_ranges)}")
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(all_ranges))
+                    self.log_url(f"Все диапазоны сохранены в файл: {output_path}")
+                except Exception as e:
+                    self.log_url(f"Ошибка при сохранении: {e}")
+        else:
+            # Существующая логика для CIDR
+            all_ips = {'ipv4': [], 'ipv6': []}
+            for url in self.selected_urls:
+                self.log_url(f"Загрузка файла по URL: {url}")
+                content = self.processor.download_file(url)
+                if content:
+                    ips = self.processor.extract_ips(content)
+                    ips_dict = {'ipv4': [], 'ipv6': []}
+                    for ip in ips:
+                        network = ipaddress.ip_network(ip, strict=False)
+                        if network.version == 4:
+                            ips_dict['ipv4'].append(ip)
+                        elif network.version == 6:
+                            ips_dict['ipv6'].append(ip)
+                    
+                    if ips_dict['ipv4'] or ips_dict['ipv6']:
+                        self.log_url(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
                         all_ips['ipv4'].extend(ips_dict['ipv4'])
                         all_ips['ipv6'].extend(ips_dict['ipv6'])
-                        if (ips_dict['ipv4'] or ips_dict['ipv6']) and save_mode == "separate":
+                        
+                        if save_mode == "separate":
                             url_parts = urlparse(url)
                             file_name = os.path.basename(url_parts.path) or url_parts.netloc.replace('.', '_') + ".txt"
                             output_path = os.path.join(self.processor.output_folder, f"url_{file_name}")
-                            self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
-                            self.log_url(f"Результаты сохранены в файл: {output_path}")
-                except Exception as e:
-                    self.log_url(f"Ошибка в потоке для URL {url}: {e}")
-
-        if use_ranges and all_ranges:
-            all_ranges = list(set(all_ranges))
-            self.log_url(f"Всего уникальных диапазонов: {len(all_ranges)}")
-            if save_mode == "combined":
-                output_path = os.path.join(self.processor.output_folder, output_file)
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(all_ranges))
-                self.log_url(f"Все диапазоны сохранены в файл: {output_path}")
-        elif all_ips['ipv4'] or all_ips['ipv6']:
+                            success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
+                            if success:
+                                self.log_url(f"Результаты сохранены в файл: {output_path}")
+                            else:
+                                self.log_url(f"Ошибка при сохранении в файл: {output_path}")
+                    else:
+                        self.log_url("IP-адреса в CIDR формате не найдены")
+                else:
+                    self.log_url("Ошибка при загрузке файла")
+            
             all_ips['ipv4'] = list(set(all_ips['ipv4']))
             all_ips['ipv6'] = list(set(all_ips['ipv6']))
             self.log_url(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
-            if save_mode == "combined":
+            
+            if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
                 output_path = os.path.join(self.processor.output_folder, output_file)
-                self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
-                self.log_url(f"Все IP-адреса сохранены в файл: {output_path}")
+                success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
+                if success:
+                    self.log_url(f"Все IP-адреса сохранены в файл: {output_path}")
+                else:
+                    self.log_url(f"Ошибка при сохранении в файл: {output_path}")
         
         self.log_url("\nОбработка завершена")
     
@@ -1881,90 +1893,78 @@ class GUI:
         self.label_example1.config(text="")
         self.label_example2.config(text="")
 
-    def expand_cidr(self, cidr, output_file=None):
-        """Разложение CIDR с потоковой записью в файл или возвратом ограниченного списка"""
-        try:
-            network = ipaddress.ip_network(cidr, strict=False)
-            num_addresses = network.num_addresses
-            
-            # Ограничение: если CIDR слишком большой (> 65536 адресов), требуем файл
-            if num_addresses > 65536 and not output_file:
-                print(f"Слишком много адресов в {cidr} ({num_addresses}). Укажите файл для записи.")
-                return []
-            
-            if output_file:
-                with open(output_file, 'a', encoding='utf-8') as f:
-                    if num_addresses == 1:
-                        f.write(f"{network.network_address}\n")
-                    else:
-                        for ip in network.hosts():
-                            f.write(f"{ip}\n")
-                return [f"Сохранено в {output_file}"]
-            else:
-                # Для небольших CIDR возвращаем список
-                return [str(ip) for ip in network.hosts()] or [str(network.network_address)]
-        except ValueError as e:
-            print(f"Ошибка при разложении CIDR {cidr}: {e}")
-            return []
+    def setup_ip_expansion_tab(self):
+        """Настройка вкладки для разложения IP"""
+        frame_input = ttk.LabelFrame(self.tab_ip_expansion, text="Ввод CIDR или диапазона")
+        frame_input.pack(fill='both', expand=True, padx=10, pady=5)
 
-    def expand_range(self, ip_range):
-        """Разложение диапазона IP-адресов (например, 192.168.1.1-192.168.1.10)"""
-        try:
-            start_ip, end_ip = ip_range.split('-')
-            start = ipaddress.ip_address(start_ip.strip())
-            end = ipaddress.ip_address(end_ip.strip())
-            if start.version != end.version:
-                raise ValueError("Версии IP не совпадают")
-            ip_list = []
-            current = start
-            while current <= end:
-                ip_list.append(str(current))
-                current = ipaddress.ip_address(int(current) + 1)
-            return ip_list
-        except ValueError as e:
-            print(f"Ошибка при разложении диапазона {ip_range}: {e}")
-            return []
+        self.text_ip_input = tk.Text(frame_input, height=5)
+        self.text_ip_input.pack(fill='both', expand=True, padx=5, pady=5)
 
-    def process_input_to_ips(self, input_text, output_file=None):
-        """Обработка текста с CIDR или диапазонами с потоковой записью"""
-        cidrs = self.extract_ips(input_text)
-        ranges = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}-(?:\d{1,3}\.){3}\d{1,3}\b', input_text)
-        
-        all_ips = []
-        saved = False
-        
-        if output_file and os.path.exists(output_file):
-            os.remove(output_file)  # Очищаем файл перед записью
-        
-        # Обработка CIDR
-        for cidr in cidrs:
-            ips = self.expand_cidr(cidr, output_file)
-            if output_file and ips and ips[0].startswith("Сохранено"):
-                saved = True
-            else:
-                all_ips.extend(ips)
-        
-        # Обработка диапазонов
-        for ip_range in ranges:
-            range_ips = self.expand_range(ip_range)
-            if output_file:
-                with open(output_file, 'a', encoding='utf-8') as f:
-                    for ip in range_ips:
-                        f.write(f"{ip}\n")
-                saved = True
-            else:
-                all_ips.extend(range_ips)
-        
-        all_ips = sorted(list(set(all_ips)), key=ipaddress.ip_address) if not output_file else all_ips
-        
-        if output_file and saved:
-            print(f"Все IP-адреса сохранены в файл: {output_file}")
-            return all_ips, True
-        return all_ips, False
+        frame_settings = ttk.LabelFrame(self.tab_ip_expansion, text="Настройки")
+        frame_settings.pack(fill='x', padx=10, pady=5)
 
+        ttk.Label(frame_settings, text="Выходной файл:").pack(side='left', padx=5)
+        self.entry_ip_output = ttk.Entry(frame_settings)
+        self.entry_ip_output.pack(side='left', fill='x', expand=True, padx=5)
+        self.entry_ip_output.insert(0, "expanded_ips.txt")
+
+        btn_process = ttk.Button(frame_settings, text="Разложить IP", command=self.expand_ips)
+        btn_process.pack(side='left', padx=5)
+
+        frame_output = ttk.LabelFrame(self.tab_ip_expansion, text="Результат")
+        frame_output.pack(fill='both', expand=True, padx=10, pady=5)
+
+        scrollbar = ttk.Scrollbar(frame_output)
+        scrollbar.pack(side='right', fill='y')
+        self.text_ip_output = tk.Text(frame_output, yscrollcommand=scrollbar.set, height=10)
+        self.text_ip_output.pack(fill='both', expand=True)
+        scrollbar.config(command=self.text_ip_output.yview)
+
+        frame_analysis = ttk.Frame(frame_settings)
+        frame_analysis.pack(fill='x', pady=5)
+
+        self.var_count_ips = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_analysis, text="Подсчитать IP", variable=self.var_count_ips).pack(side='left', padx=5)
+        
+        ttk.Label(frame_analysis, text="Сравнить с CIDR:").pack(side='left', padx=5)
+        self.entry_compare_cidr = ttk.Entry(frame_analysis, width=20)
+        self.entry_compare_cidr.pack(side='left', padx=5)
+
+    def expand_ips(self):
+        self.text_ip_output.delete(1.0, tk.END)
+        input_text = self.text_ip_input.get("1.0", tk.END).strip()
+        if not input_text:
+            messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
+            return
+
+        output_file = self.entry_ip_output.get().strip()
+        output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
+        count_ips = self.var_count_ips.get()
+        compare_cidr = self.entry_compare_cidr.get().strip()
+
+        ips, saved = self.processor.process_input_to_ips(input_text, output_path)
+        
+        if ips:
+            self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
+            if count_ips:
+                cidrs = self.processor.extract_ips(input_text)
+                for cidr in cidrs:
+                    count = self.processor.count_ips_in_cidr(cidr)
+                    self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
+            if compare_cidr and self.processor.validate_ip_cidr(compare_cidr):
+                for cidr in self.processor.extract_ips(input_text):
+                    overlap = self.processor.check_cidr_overlap(cidr, compare_cidr)
+                    self.text_ip_output.insert(tk.END, f"Пересечение {cidr} с {compare_cidr}: {'Да' if overlap else 'Нет'}\n")
+            self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
+            if len(ips) > 100:
+                self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
+            if saved:
+                self.text_ip_output.insert(tk.END, f"\nВсе IP сохранены в: {output_path}")
+        else:
+            self.text_ip_output.insert(tk.END, "IP-адреса не найдены")
 
 def main():
-    """Основная функция программы"""
     processor = IPCIDRProcessor()
     
     if len(sys.argv) > 1:
@@ -1980,7 +1980,7 @@ def main():
                 - Объединить IP из файлов в один выходной файл.
               python script.py --gui
                 - Запустить графический интерфейс.
-    
+
             Полезные команды Linux для работы с терминалом:
               ls -l -> dir (Windows) - Показать список файлов.
               cat file.txt - Просмотр содержимого файла (type file.txt в Windows).
@@ -2002,7 +2002,7 @@ def main():
         if args.gui:
             # Запускаем GUI
             gui = GUI(processor)
-            gui.start()  # Явно вызываем start()
+            gui.start()
         else:
             # Обработка в командной строке
             if not args.files:
@@ -2012,6 +2012,7 @@ def main():
             all_ips = []
             for file_path in args.files:
                 if file_path.startswith(('http://', 'https://')):
+                    # Это URL
                     print(f"Загрузка файла по URL: {file_path}")
                     content = processor.download_file(file_path)
                     if content:
@@ -2020,12 +2021,13 @@ def main():
                             print(f"Найдено {len(ips)} IP-адресов в CIDR формате")
                             all_ips.extend(ips)
                 else:
+                    # Это локальный файл
                     if os.path.exists(file_path):
                         print(f"Обработка файла: {file_path}")
-                        ips_dict = processor.process_file(file_path)
-                        if ips_dict['ipv4'] or ips_dict['ipv6']:
-                            print(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
-                            all_ips.extend(ips_dict['ipv4'] + ips_dict['ipv6'])
+                        ips = processor.process_file(file_path)
+                        if ips:
+                            print(f"Найдено {len(ips)} IP-адресов в CIDR формате")
+                            all_ips.extend(ips)
                     else:
                         print(f"Файл не найден: {file_path}")
             
@@ -2037,16 +2039,18 @@ def main():
                 output_file = args.output if args.output else "output_ips.txt"
                 mask_name = args.mask if args.mask else processor.config['default_mask']
                 
-                if args.merge:
-                    processor.merge_files(args.files, output_file, mask_name)
+                if processor.save_results(all_ips, output_file, mask_name):
+                    print(f"Результаты сохранены в файл: {output_file}")
                 else:
-                    processor.save_results(all_ips, output_file, mask_name)
+                    print("Ошибка при сохранении результатов")
     else:
         # Запускаем интерактивное меню
         if platform.system() == "Linux" and "DISPLAY" not in os.environ:
+            # Если нет графической среды (например, в терминале)
             console_ui = ConsoleUI(processor)
             console_ui.main_menu()
         else:
+            # Пытаемся запустить GUI, если не получится - запускаем консольный интерфейс
             try:
                 gui = GUI(processor)
                 gui.start()
