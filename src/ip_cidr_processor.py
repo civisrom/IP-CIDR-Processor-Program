@@ -22,16 +22,20 @@ class IPCIDRProcessor:
             self.config_file = 'ip_cidr_config.yaml'
             self.output_folder = 'output'
             self.default_config = {
-                'masks': [
-                    {'name': 'default', 'prefix': '', 'suffix': '', 'separator': '\n'},
-                    {'name': 'clash', 'prefix': 'IP-CIDR,', 'suffix': ',no-resolve', 'separator': '\n'},
-                    {'name': 'custom', 'prefix': '[', 'suffix': ']', 'separator': ', '},
-                    {'name': 'v2ray', 'prefix': 'ip-cidr:', 'suffix': '', 'separator': ';'},
-                    {'name': 'surge', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n'},
-                    {'name': 'shadowsocks', 'prefix': '', 'suffix': '@shadowsocks', 'separator': ' | '},
-                    {'name': 'json', 'prefix': '{"ip": "', 'suffix': '"}', 'separator': ',\n'},
-                ],
-                'default_mask': 'default'
+            'masks': [
+                {'name': 'default', 'prefix': '', 'suffix': '', 'separator': '\n'},
+                {'name': 'clash', 'prefix': 'IP-CIDR,', 'suffix': ',no-resolve', 'separator': '\n'},
+                {'name': 'custom', 'prefix': '[', 'suffix': ']', 'separator': ', '},
+                {'name': 'v2ray', 'prefix': 'ip-cidr:', 'suffix': '', 'separator': ';'},
+                {'name': 'surge', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n'},
+                {'name': 'shadowsocks', 'prefix': '', 'suffix': '@shadowsocks', 'separator': ' | '},
+                {'name': 'json', 'prefix': '{"ip": "', 'suffix': '"}', 'separator': ',\n'},
+                # Новые варианты масок
+                {'name': 'csv', 'prefix': '"', 'suffix': '"', 'separator': ','},
+                {'name': 'yaml', 'prefix': '- ', 'suffix': '', 'separator': '\n'},
+                {'name': 'complex', 'prefix': 'entry: {ip} -> ', 'suffix': ' [active]', 'separator': ';\n'}
+            ],
+            'default_mask': 'default'
             }
             self.config = self.load_config()
             
@@ -312,13 +316,17 @@ class IPCIDRProcessor:
             return ""
 
     def apply_mask(self, ips, mask_name):
-        """Применение маски к IP-адресам"""
+        """Применение маски к IP-адресам с поддержкой сложных шаблонов"""
         mask = next((m for m in self.config['masks'] if m['name'] == mask_name), None)
         if not mask:
-            print(f"Маска '{mask_name}' не найдена, используем маску по умолчанию")
             mask = next((m for m in self.config['masks'] if m['name'] == self.config['default_mask']), self.config['masks'][0])
         
-        formatted_ips = [f"{mask['prefix']}{ip}{mask['suffix']}" for ip in ips]
+        # Поддержка сложных шаблонов с использованием {ip}
+        if '{ip}' in mask['prefix'] or '{ip}' in mask['suffix']:
+            formatted_ips = [f"{mask['prefix'].replace('{ip}', ip)}{ip}{mask['suffix'].replace('{ip}', ip)}" for ip in ips]
+        else:
+            formatted_ips = [f"{mask['prefix']}{ip}{mask['suffix']}" for ip in ips]
+        
         return mask['separator'].join(formatted_ips)
 
     def save_results(self, ips, output_file, mask_name=None):
@@ -342,15 +350,14 @@ class IPCIDRProcessor:
             return False
 
     def add_mask(self, name, prefix, suffix, separator):
-        """Добавление новой маски в конфигурацию"""
+        """Добавление новой маски с поддержкой комбинированных разделителей"""
         new_mask = {
             'name': name,
             'prefix': prefix,
             'suffix': suffix,
-            'separator': separator
+            'separator': separator  # Теперь separator может быть комбинацией, например ",\n"
         }
         
-        # Проверяем, существует ли маска с таким именем
         for i, mask in enumerate(self.config['masks']):
             if mask['name'] == name:
                 self.config['masks'][i] = new_mask
@@ -1322,7 +1329,6 @@ class GUI:
         frame_name.pack(fill='x', padx=5, pady=5)
         
         ttk.Label(frame_name, text="Имя маски:").pack(side='left', padx=5)
-        
         self.entry_mask_name = ttk.Entry(frame_name)
         self.entry_mask_name.pack(side='left', fill='x', expand=True, padx=5)
         
@@ -1330,7 +1336,6 @@ class GUI:
         frame_prefix.pack(fill='x', padx=5, pady=5)
         
         ttk.Label(frame_prefix, text="Префикс:").pack(side='left', padx=5)
-        
         self.entry_mask_prefix = ttk.Entry(frame_prefix)
         self.entry_mask_prefix.pack(side='left', fill='x', expand=True, padx=5)
         
@@ -1338,50 +1343,57 @@ class GUI:
         frame_suffix.pack(fill='x', padx=5, pady=5)
         
         ttk.Label(frame_suffix, text="Суффикс:").pack(side='left', padx=5)
-        
         self.entry_mask_suffix = ttk.Entry(frame_suffix)
         self.entry_mask_suffix.pack(side='left', fill='x', expand=True, padx=5)
         
-        frame_separator = ttk.Frame(frame_edit)
+        # Обновленный выбор разделителей с поддержкой комбинаций
+        frame_separator = ttk.LabelFrame(frame_edit, text="Разделители")
         frame_separator.pack(fill='x', padx=5, pady=5)
         
-        ttk.Label(frame_separator, text="Разделитель:").pack(side='left', padx=5)
+        self.separator_vars = {
+            'newline': tk.BooleanVar(value=True),
+            'comma': tk.BooleanVar(value=False),
+            'space': tk.BooleanVar(value=False),
+            'semicolon': tk.BooleanVar(value=False),
+            'pipe': tk.BooleanVar(value=False),
+            'tab': tk.BooleanVar(value=False),
+            'custom': tk.BooleanVar(value=False)
+        }
         
-        self.var_separator = tk.StringVar(value="newline")
         separators = [
-            ("Новая строка", "newline", "\n"),
-            ("Запятая и пробел", "comma", ", "),
-            ("Точка с запятой", "semicolon", ";"),
-            ("Вертикальная черта", "pipe", "|"),
-            ("Табуляция", "tab", "\t"),
-            ("Свой:", "custom", "")
+            ("Новая строка", 'newline', '\n'),
+            ("Запятая", 'comma', ','),
+            ("Пробел", 'space', ' '),
+            ("Точка с запятой", 'semicolon', ';'),
+            ("Вертикальная черта", 'pipe', '|'),
+            ("Табуляция", 'tab', '\t'),
+            ("Свой", 'custom', '')
         ]
         
-        for label, value, sep in separators:
-            if value == "custom":
-                frame_custom = ttk.Frame(frame_separator)
-                frame_custom.pack(side='left', padx=5)
-                ttk.Radiobutton(frame_custom, text=label, variable=self.var_separator, value=value).pack(side='left')
-                self.entry_separator = ttk.Entry(frame_custom, width=10)
-                self.entry_separator.pack(side='left', padx=5)
-            else:
-                ttk.Radiobutton(frame_separator, text=label, variable=self.var_separator, value=value).pack(side='left', padx=5)
+        for label, key, sep in separators:
+            frame_sep = ttk.Frame(frame_separator)
+            frame_sep.pack(side='left', padx=5)
+            cb = ttk.Checkbutton(frame_sep, text=label, variable=self.separator_vars[key])
+            cb.pack(side='left')
+            if key == 'custom':
+                self.entry_custom_separator = ttk.Entry(frame_sep, width=10)
+                self.entry_custom_separator.pack(side='left', padx=5)
         
         frame_examples = ttk.Frame(frame_edit)
         frame_examples.pack(fill='x', padx=5, pady=5)
         
         ttk.Label(frame_examples, text="Примеры:").pack(side='left', padx=5)
-        
         self.label_example1 = ttk.Label(frame_examples, text="", wraplength=700)
         self.label_example1.pack(side='top', fill='x', padx=5)
-        
         self.label_example2 = ttk.Label(frame_examples, text="", wraplength=700)
         self.label_example2.pack(side='top', fill='x', padx=5)
         
+        # Привязка событий для обновления примеров
         self.entry_mask_prefix.bind("<KeyRelease>", self.update_example)
         self.entry_mask_suffix.bind("<KeyRelease>", self.update_example)
-        self.entry_separator.bind("<KeyRelease>", self.update_example)
-        self.var_separator.trace_add("write", lambda *args: self.update_example())
+        self.entry_custom_separator.bind("<KeyRelease>", self.update_example)
+        for var in self.separator_vars.values():
+            var.trace_add("write", lambda *args: self.update_example())
         
         frame_mask_buttons = ttk.Frame(frame_edit)
         frame_mask_buttons.pack(fill='x', pady=5)
@@ -1391,19 +1403,6 @@ class GUI:
         
         btn_clear_fields = ttk.Button(frame_mask_buttons, text="Очистить поля", command=self.clear_mask_fields)
         btn_clear_fields.pack(side='left', padx=5)
-
-        frame_range_settings = ttk.LabelFrame(self.tab_settings, text="Настройки диапазонов")
-        frame_range_settings.pack(fill='x', padx=10, pady=5)
-        
-        ttk.Label(frame_range_settings, text="Маска диапазона:").pack(side='left', padx=5)
-        self.entry_range_mask = ttk.Entry(frame_range_settings)
-        self.entry_range_mask.pack(side='left', fill='x', expand=True, padx=5)
-        self.entry_range_mask.insert(0, self.processor.range_mask)
-        
-        ttk.Label(frame_range_settings, text="Пример: 192.168.1.0-192.168.1.255").pack(side='left', padx=5)
-        
-        btn_save_range_mask = ttk.Button(frame_range_settings, text="Сохранить", command=self.save_range_mask)
-        btn_save_range_mask.pack(side='left', padx=5)
 
     def save_range_mask(self):
             mask = self.entry_range_mask.get()
@@ -1416,23 +1415,41 @@ class GUI:
         prefix = self.entry_mask_prefix.get()
         suffix = self.entry_mask_suffix.get()
         
-        separator_type = self.var_separator.get()
-        separators = {
-            "newline": "\n",
-            "comma": ", ",
-            "semicolon": ";",
-            "pipe": "|",
-            "tab": "\t",
-            "custom": self.entry_separator.get()
-        }
-        separator = separators.get(separator_type, "\n")
-        separator_display = separator.replace('\n', '\\n')
+        # Формирование комбинированного разделителя
+        separator = ''
+        if self.separator_vars['newline'].get():
+            separator += '\n'
+        if self.separator_vars['comma'].get():
+            separator += ','
+        if self.separator_vars['space'].get():
+            separator += ' '
+        if self.separator_vars['semicolon'].get():
+            separator += ';'
+        if self.separator_vars['pipe'].get():
+            separator += '|'
+        if self.separator_vars['tab'].get():
+            separator += '\t'
+        if self.separator_vars['custom'].get():
+            separator += self.entry_custom_separator.get()
+        
+        separator_display = separator.replace('\n', '\\n').replace('\t', '\\t')
+        if not separator:
+            separator = '\n'  # По умолчанию новая строка
+            separator_display = '\\n'
         
         example_ip1 = "192.168.1.0/24"
         example_ip2 = "2001:db8::/32"
         
-        self.label_example1.config(text=f"IPv4: {prefix}{example_ip1}{suffix}")
-        self.label_example2.config(text=f"IPv6: {prefix}{example_ip2}{suffix} (разделитель: '{separator_display}' между записями)")
+        # Пример с учетом сложных шаблонов
+        if '{ip}' in prefix or '{ip}' in suffix:
+            ex1 = f"{prefix.replace('{ip}', example_ip1)}{example_ip1}{suffix.replace('{ip}', example_ip1)}"
+            ex2 = f"{prefix.replace('{ip}', example_ip2)}{example_ip2}{suffix.replace('{ip}', example_ip2)}"
+        else:
+            ex1 = f"{prefix}{example_ip1}{suffix}"
+            ex2 = f"{prefix}{example_ip2}{suffix}"
+        
+        self.label_example1.config(text=f"IPv4: {ex1}")
+        self.label_example2.config(text=f"IPv6: {ex2} (разделитель: '{separator_display}' между записями)")
     
     def start(self):
         """Запуск графического интерфейса"""
@@ -1799,29 +1816,41 @@ class GUI:
         
         self.entry_mask_name.delete(0, tk.END)
         self.entry_mask_name.insert(0, mask['name'])
-        
         self.entry_mask_prefix.delete(0, tk.END)
         self.entry_mask_prefix.insert(0, mask['prefix'])
-        
         self.entry_mask_suffix.delete(0, tk.END)
         self.entry_mask_suffix.insert(0, mask['suffix'])
         
-        if mask['separator'] == '\n':
-            self.var_separator.set("newline")
-        elif mask['separator'] == ', ':
-            self.var_separator.set("comma")
-        elif mask['separator'] == ';':
-            self.var_separator.set("semicolon")
-        elif mask['separator'] == '|':
-            self.var_separator.set("pipe")
-        elif mask['separator'] == '\t':
-            self.var_separator.set("tab")
-        else:
-            self.var_separator.set("custom")
-            self.entry_separator.delete(0, tk.END)
-            self.entry_separator.insert(0, mask['separator'])
+        # Сброс всех флажков
+        for var in self.separator_vars.values():
+            var.set(False)
         
-        self.update_example()  # Вызываем исправленный метод
+        # Установка флажков в зависимости от текущего разделителя
+        separator = mask['separator']
+        if '\n' in separator:
+            self.separator_vars['newline'].set(True)
+            separator = separator.replace('\n', '')
+        if ',' in separator:
+            self.separator_vars['comma'].set(True)
+            separator = separator.replace(',', '')
+        if ' ' in separator:
+            self.separator_vars['space'].set(True)
+            separator = separator.replace(' ', '')
+        if ';' in separator:
+            self.separator_vars['semicolon'].set(True)
+            separator = separator.replace(';', '')
+        if '|' in separator:
+            self.separator_vars['pipe'].set(True)
+            separator = separator.replace('|', '')
+        if '\t' in separator:
+            self.separator_vars['tab'].set(True)
+            separator = separator.replace('\t', '')
+        if separator:  # Остаток - пользовательский разделитель
+            self.separator_vars['custom'].set(True)
+            self.entry_custom_separator.delete(0, tk.END)
+            self.entry_custom_separator.insert(0, separator)
+        
+        self.update_example()
     
     def set_default_mask(self):
         """Установка выбранной маски по умолчанию"""
@@ -1839,27 +1868,6 @@ class GUI:
         else:
             messagebox.showerror("Ошибка", "Не удалось установить маску по умолчанию")
     
-    def update_example(self, event=None):
-        prefix = self.entry_mask_prefix.get()
-        suffix = self.entry_mask_suffix.get()
-        
-        separator_type = self.var_separator.get()
-        separators = {
-            "newline": "\n",
-            "comma": ", ",
-            "semicolon": ";",
-            "pipe": "|",
-            "tab": "\t",
-            "custom": self.entry_separator.get()
-        }
-        separator = separators.get(separator_type, "\n")
-        separator_display = separator.replace('\n', '\\n')
-        
-        example_ip1 = "192.168.1.0/24"
-        example_ip2 = "2001:db8::/32"
-        
-        self.label_example1.config(text=f"IPv4: {prefix}{example_ip1}{suffix}")
-        self.label_example2.config(text=f"IPv6: {prefix}{example_ip2}{suffix} (разделитель: '{separator_display}' между записями)")
     
     def add_mask(self):
         name = self.entry_mask_name.get().strip()
@@ -1870,16 +1878,25 @@ class GUI:
             messagebox.showwarning("Предупреждение", "Имя маски не может быть пустым")
             return
         
-        separator_type = self.var_separator.get()
-        separators = {
-            "newline": "\n",
-            "comma": ", ",
-            "semicolon": ";",
-            "pipe": "|",
-            "tab": "\t",
-            "custom": self.entry_separator.get()
-        }
-        separator = separators.get(separator_type, "\n")
+        # Формирование комбинированного разделителя
+        separator = ''
+        if self.separator_vars['newline'].get():
+            separator += '\n'
+        if self.separator_vars['comma'].get():
+            separator += ','
+        if self.separator_vars['space'].get():
+            separator += ' '
+        if self.separator_vars['semicolon'].get():
+            separator += ';'
+        if self.separator_vars['pipe'].get():
+            separator += '|'
+        if self.separator_vars['tab'].get():
+            separator += '\t'
+        if self.separator_vars['custom'].get():
+            separator += self.entry_custom_separator.get()
+        
+        if not separator:
+            separator = '\n'  # По умолчанию новая строка
         
         if self.processor.add_mask(name, prefix, suffix, separator):
             messagebox.showinfo("Успех", f"Маска '{name}' успешно добавлена")
@@ -1898,11 +1915,29 @@ class GUI:
         self.label_example2.config(text="")
 
     def setup_ip_expansion_tab(self):
-        """Настройка вкладки для разложения IP"""
-        frame_input = ttk.LabelFrame(self.tab_ip_expansion, text="Ввод CIDR или диапазона")
+        frame_input = ttk.LabelFrame(self.tab_ip_expansion, text="Ввод данных")
         frame_input.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        # Добавление выбора источника
+        frame_source = ttk.Frame(frame_input)
+        frame_source.pack(fill='x', padx=5, pady=5)
+        
+        self.var_source = tk.StringVar(value="text")
+        ttk.Radiobutton(frame_source, text="Текст", variable=self.var_source, value="text").pack(side='left', padx=5)
+        ttk.Radiobutton(frame_source, text="Локальный файл", variable=self.var_source, value="file").pack(side='left', padx=5)
+        ttk.Radiobutton(frame_source, text="URL", variable=self.var_source, value="url").pack(side='left', padx=5)
+        
+        # Поле ввода текста
         self.text_ip_input = tk.Text(frame_input, height=5)
         self.text_ip_input.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Поле для файла или URL
+        frame_file_url = ttk.Frame(frame_input)
+        frame_file_url.pack(fill='x', padx=5, pady=5)
+        self.entry_file_url = ttk.Entry(frame_file_url)
+        self.entry_file_url.pack(side='left', fill='x', expand=True, padx=5)
+        btn_browse = ttk.Button(frame_file_url, text="Обзор", command=self.browse_file)
+        btn_browse.pack(side='left', padx=5)
         
         frame_settings = ttk.LabelFrame(self.tab_ip_expansion, text="Настройки")
         frame_settings.pack(fill='x', padx=10, pady=5)
@@ -1912,7 +1947,6 @@ class GUI:
         self.entry_ip_output.pack(side='left', fill='x', expand=True, padx=5)
         self.entry_ip_output.insert(0, "expanded_ips.txt")
         
-        # Добавляем опции анализа
         frame_analysis = ttk.Frame(frame_settings)
         frame_analysis.pack(fill='x', pady=5)
         
@@ -1934,35 +1968,51 @@ class GUI:
         self.text_ip_output.pack(fill='both', expand=True)
         scrollbar.config(command=self.text_ip_output.yview)
 
+    def browse_file(self):
+        if self.var_source.get() == "file":
+            file = filedialog.askopenfilename(title="Выберите файл")
+            if file:
+                self.entry_file_url.delete(0, tk.END)
+                self.entry_file_url.insert(0, file)
+        else:
+            self.entry_file_url.delete(0, tk.END)
+
     def expand_ips(self):
-        """Разложение введенных CIDR и диапазонов"""
         self.text_ip_output.delete(1.0, tk.END)
-        input_text = self.text_ip_input.get("1.0", tk.END).strip()
-        if not input_text:
-            messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
-            return
+        source = self.var_source.get()
         
-        # Проверяем, есть ли в вводе CIDR-записи
-        cidrs = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b', input_text)
-        if not cidrs:
-            # Если CIDR не найдены, пробуем искать IP-адреса
-            ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', input_text)
-            if ips:
-                self.text_ip_output.insert(tk.END, "CIDR не найдены, найдены только IP-адреса\n")
+        if source == "text":
+            input_text = self.text_ip_input.get("1.0", tk.END).strip()
+            if not input_text:
+                messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
+                return
+        elif source == "file":
+            file_path = self.entry_file_url.get().strip()
+            if not file_path or not os.path.exists(file_path):
+                messagebox.showwarning("Предупреждение", "Укажите существующий файл")
+                return
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                input_text = f.read()
+        elif source == "url":
+            url = self.entry_file_url.get().strip()
+            if not url:
+                messagebox.showwarning("Предупреждение", "Укажите URL")
+                return
+            input_text = self.processor.download_file(url)
+            if not input_text:
+                self.text_ip_output.insert(tk.END, f"Ошибка загрузки URL: {url}\n")
+                return
         
         output_file = self.entry_ip_output.get().strip()
         output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
         
-        # Обработка ввода
         ips, saved = self.processor.process_input_to_ips(input_text, output_path)
         
         if ips:
             self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
             
-            # Если включена опция подсчета IP в CIDR
             if self.var_count_ips.get():
-                # Непосредственно выделяем CIDR из ввода
-                cidrs = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b', input_text)
+                cidrs = self.processor.extract_ips(input_text)
                 if cidrs:
                     self.text_ip_output.insert(tk.END, "Подсчет IP в CIDR:\n")
                     for cidr in cidrs:
@@ -1974,64 +2024,30 @@ class GUI:
                 else:
                     self.text_ip_output.insert(tk.END, "CIDR не найдены для подсчета IP\n")
             
-            # Обработка сравнения с множеством CIDR
-            compare_text = self.entry_compare_cidr.get().strip()
-            if compare_text:
-                # Разделяем текст на отдельные CIDR/IP, используя пробелы, запятые, точки с запятой или новые строки как разделители
-                compare_cidrs = re.split(r'[,;\s]+', compare_text)
-                # Фильтруем пустые строки
-                compare_cidrs = [cidr.strip() for cidr in compare_cidrs if cidr.strip()]
-                
+            compare_cidr = self.entry_compare_cidr.get().strip()
+            if compare_cidr:
+                compare_cidrs = re.split(r'[,\s]+', compare_cidr)
+                compare_cidrs = [c.strip() for c in compare_cidrs if c.strip()]
                 if compare_cidrs:
                     self.text_ip_output.insert(tk.END, "\nПересечения с указанными CIDR:\n")
+                    input_cidrs = self.processor.extract_ips(input_text)
                     has_overlaps = False
-                    
-                    # Непосредственно выделяем CIDR из основного ввода
-                    input_cidrs = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b', input_text)
-                    
-                    if input_cidrs:
-                        for input_cidr in input_cidrs:
-                            # Добавляем маску /32 для одиночных IP-адресов, если её нет
-                            if '/' not in input_cidr:
-                                input_cidr = f"{input_cidr}/32"
-                                
-                            for compare_cidr in compare_cidrs:
-                                # Добавляем маску /32 для одиночных IP-адресов для сравнения
-                                if '/' not in compare_cidr and re.match(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', compare_cidr):
-                                    compare_cidr = f"{compare_cidr}/32"
-                                    
-                                try:
-                                    # Проверяем корректность CIDR
-                                    ipaddress.ip_network(compare_cidr, strict=False)
-                                    
-                                    try:
-                                        overlap = self.processor.check_cidr_overlap(input_cidr, compare_cidr)
-                                        # Выводим только случаи, когда есть пересечение (результат "Да")
-                                        if overlap:
-                                            self.text_ip_output.insert(tk.END, 
-                                                f"Пересечение {input_cidr} с {compare_cidr}: Да\n")
-                                            has_overlaps = True
-                                    except Exception as e:
-                                        self.text_ip_output.insert(tk.END, 
-                                            f"Ошибка при проверке пересечения {input_cidr} с {compare_cidr}: {str(e)}\n")
-                                except ValueError:
-                                    self.text_ip_output.insert(tk.END, f"Ошибка: {compare_cidr} не является корректным CIDR\n")
-                        
-                        # Если не найдено ни одного пересечения
-                        if not has_overlaps:
-                            self.text_ip_output.insert(tk.END, "Пересечений не найдено\n")
-                    else:
-                        self.text_ip_output.insert(tk.END, "CIDR не найдены в основном вводе для сравнения\n")
-                else:
-                    self.text_ip_output.insert(tk.END, "Не указаны CIDR для сравнения\n")
+                    for input_cidr in input_cidrs:
+                        for comp_cidr in compare_cidrs:
+                            try:
+                                overlap = self.processor.check_cidr_overlap(input_cidr, comp_cidr)
+                                if overlap:
+                                    self.text_ip_output.insert(tk.END, f"{input_cidr} пересекается с {comp_cidr}: Да\n")
+                                    has_overlaps = True
+                            except Exception as e:
+                                self.text_ip_output.insert(tk.END, f"Ошибка проверки {input_cidr} с {comp_cidr}: {str(e)}\n")
+                    if not has_overlaps:
+                        self.text_ip_output.insert(tk.END, "Пересечений не найдено\n")
             
-            # Выводим первые 100 IP
-            self.text_ip_output.insert(tk.END, "\nСписок IP-адресов:\n")
+            self.text_ip_output.insert(tk.END, "\nСписок IP-адресов (первые 100):\n")
             self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
             if len(ips) > 100:
                 self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
-            
-            # Если файл был сохранен
             if saved:
                 self.text_ip_output.insert(tk.END, f"\nВсе IP сохранены в: {output_path}")
         else:
