@@ -1909,8 +1909,15 @@ class GUI:
         self.entry_mask_name.delete(0, tk.END)
         self.entry_mask_prefix.delete(0, tk.END)
         self.entry_mask_suffix.delete(0, tk.END)
-        self.var_separator.set("newline")
-        self.entry_separator.delete(0, tk.END)
+        
+        # Сбрасываем все флажки разделителей и очищаем пользовательский ввод
+        for key in self.separator_vars:
+            if key == 'newline':
+                self.separator_vars[key].set(True)  # По умолчанию оставляем только новую строку
+            else:
+                self.separator_vars[key].set(False)
+        self.entry_custom_separator.delete(0, tk.END)
+        
         self.label_example1.config(text="")
         self.label_example2.config(text="")
 
