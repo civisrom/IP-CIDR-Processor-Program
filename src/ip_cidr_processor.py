@@ -1056,7 +1056,6 @@ class GUI:
         self.combo_local_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_local_mask.set(self.processor.config['default_mask'])
         
-        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -1100,7 +1099,6 @@ class GUI:
         self.text_local_log.pack(side='left', fill='both', expand=True)
         scrollbar_log.config(command=self.text_local_log.yview)
     
-        # Добавляем опции для диапазонов
         frame_range = ttk.Frame(frame_settings)
         frame_range.pack(fill='x', padx=5, pady=5)
         
@@ -1115,7 +1113,6 @@ class GUI:
         self.entry_range_pattern.insert(0, "{start}-{end}")
 
     def setup_url_tab(self):
-        """Настройка вкладки для обработки файлов по URL"""
         frame_urls = ttk.LabelFrame(self.tab_url, text="Ввод URL")
         frame_urls.pack(fill='both', expand=True, padx=10, pady=5)
         
@@ -1159,7 +1156,6 @@ class GUI:
         self.combo_url_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_url_mask.set(self.processor.config['default_mask'])
         
-        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -1247,12 +1243,11 @@ class GUI:
         
         ttk.Label(frame_mask, text="Маска:").pack(side='left', padx=5)
         
-        masks = ["none"] + self.processor.get_masks()  # Добавляем опцию "без маски"
+        masks = ["none"] + self.processor.get_masks()
         self.combo_merge_mask = ttk.Combobox(frame_mask, values=masks, state="readonly")
         self.combo_merge_mask.pack(side='left', fill='x', expand=True, padx=5)
         self.combo_merge_mask.set(self.processor.config['default_mask'])
         
-        # Выбор типов IP для сохранения
         frame_ip_types = ttk.Frame(frame_settings)
         frame_ip_types.pack(fill='x', padx=5, pady=5)
         
@@ -1346,7 +1341,6 @@ class GUI:
         self.entry_mask_suffix = ttk.Entry(frame_suffix)
         self.entry_mask_suffix.pack(side='left', fill='x', expand=True, padx=5)
         
-        # Обновленный выбор разделителей с последовательностью
         frame_separator = ttk.LabelFrame(frame_edit, text="Разделители (выбирайте в порядке применения)")
         frame_separator.pack(fill='x', padx=5, pady=5)
         
@@ -1360,7 +1354,7 @@ class GUI:
             'custom': tk.BooleanVar(value=False)
         }
         
-        self.separator_order = []  # Список для хранения порядка выбора разделителей
+        self.separator_order = []
         
         separators = [
             ("Новая строка", 'newline', '\n'),
@@ -1405,114 +1399,59 @@ class GUI:
         
         btn_clear_fields = ttk.Button(frame_mask_buttons, text="Очистить поля", command=self.clear_mask_fields)
         btn_clear_fields.pack(side='left', padx=5)
-        frame_masks = ttk.LabelFrame(self.tab_settings, text="Доступные маски")
-        frame_masks.pack(fill='both', expand=True, padx=10, pady=5)
+
+    def setup_ip_expansion_tab(self):
+        frame_input = ttk.LabelFrame(self.tab_ip_expansion, text="Ввод данных")
+        frame_input.pack(fill='both', expand=True, padx=10, pady=5)
         
-        frame_list = ttk.Frame(frame_masks)
-        frame_list.pack(fill='both', expand=True, padx=5, pady=5)
+        frame_source = ttk.Frame(frame_input)
+        frame_source.pack(fill='x', padx=5, pady=5)
         
-        scrollbar = ttk.Scrollbar(frame_list)
+        self.var_source = tk.StringVar(value="text")
+        ttk.Radiobutton(frame_source, text="Текст", variable=self.var_source, value="text").pack(side='left', padx=5)
+        ttk.Radiobutton(frame_source, text="Локальный файл", variable=self.var_source, value="file").pack(side='left', padx=5)
+        ttk.Radiobutton(frame_source, text="URL", variable=self.var_source, value="url").pack(side='left', padx=5)
+        
+        self.text_ip_input = tk.Text(frame_input, height=5)
+        self.text_ip_input.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        frame_file_url = ttk.Frame(frame_input)
+        frame_file_url.pack(fill='x', padx=5, pady=5)
+        self.entry_file_url = ttk.Entry(frame_file_url)
+        self.entry_file_url.pack(side='left', fill='x', expand=True, padx=5)
+        btn_browse = ttk.Button(frame_file_url, text="Обзор", command=self.browse_file)
+        btn_browse.pack(side='left', padx=5)
+        
+        frame_settings = ttk.LabelFrame(self.tab_ip_expansion, text="Настройки")
+        frame_settings.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(frame_settings, text="Выходной файл:").pack(side='left', padx=5)
+        self.entry_ip_output = ttk.Entry(frame_settings)
+        self.entry_ip_output.pack(side='left', fill='x', expand=True, padx=5)
+        self.entry_ip_output.insert(0, "expanded_ips.txt")
+        
+        frame_analysis = ttk.Frame(frame_settings)
+        frame_analysis.pack(fill='x', pady=5)
+        
+        self.var_count_ips = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_analysis, text="Подсчитать IP", variable=self.var_count_ips).pack(side='left', padx=5)
+        
+        ttk.Label(frame_analysis, text="Сравнить с CIDR:").pack(side='left', padx=5)
+        self.entry_compare_cidr = ttk.Entry(frame_analysis, width=20)
+        self.entry_compare_cidr.pack(side='left', padx=5)
+        
+        btn_process = ttk.Button(frame_settings, text="Разложить IP", command=self.expand_ips)
+        btn_process.pack(side='left', padx=5)
+        
+        frame_output = ttk.LabelFrame(self.tab_ip_expansion, text="Результат")
+        frame_output.pack(fill='both', expand=True, padx=10, pady=5)
+        scrollbar = ttk.Scrollbar(frame_output)
         scrollbar.pack(side='right', fill='y')
-        
-        self.listbox_masks = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
-        self.listbox_masks.pack(side='left', fill='both', expand=True)
-        scrollbar.config(command=self.listbox_masks.yview)
-        
-        self.update_mask_list()
-        
-        frame_buttons = ttk.Frame(frame_masks)
-        frame_buttons.pack(fill='x', pady=5)
-        
-        btn_edit_mask = ttk.Button(frame_buttons, text="Редактировать маску", command=self.edit_mask)
-        btn_edit_mask.pack(side='left', padx=5)
-        
-        btn_set_default = ttk.Button(frame_buttons, text="Установить по умолчанию", command=self.set_default_mask)
-        btn_set_default.pack(side='left', padx=5)
-        
-        frame_edit = ttk.LabelFrame(self.tab_settings, text="Добавление/изменение маски")
-        frame_edit.pack(fill='x', padx=10, pady=5)
-        
-        frame_name = ttk.Frame(frame_edit)
-        frame_name.pack(fill='x', padx=5, pady=5)
-        
-        ttk.Label(frame_name, text="Имя маски:").pack(side='left', padx=5)
-        self.entry_mask_name = ttk.Entry(frame_name)
-        self.entry_mask_name.pack(side='left', fill='x', expand=True, padx=5)
-        
-        frame_prefix = ttk.Frame(frame_edit)
-        frame_prefix.pack(fill='x', padx=5, pady=5)
-        
-        ttk.Label(frame_prefix, text="Префикс:").pack(side='left', padx=5)
-        self.entry_mask_prefix = ttk.Entry(frame_prefix)
-        self.entry_mask_prefix.pack(side='left', fill='x', expand=True, padx=5)
-        
-        frame_suffix = ttk.Frame(frame_edit)
-        frame_suffix.pack(fill='x', padx=5, pady=5)
-        
-        ttk.Label(frame_suffix, text="Суффикс:").pack(side='left', padx=5)
-        self.entry_mask_suffix = ttk.Entry(frame_suffix)
-        self.entry_mask_suffix.pack(side='left', fill='x', expand=True, padx=5)
-        
-        # Обновленный выбор разделителей с поддержкой комбинаций
-        frame_separator = ttk.LabelFrame(frame_edit, text="Разделители")
-        frame_separator.pack(fill='x', padx=5, pady=5)
-        
-        self.separator_vars = {
-            'newline': tk.BooleanVar(value=True),
-            'comma': tk.BooleanVar(value=False),
-            'space': tk.BooleanVar(value=False),
-            'semicolon': tk.BooleanVar(value=False),
-            'pipe': tk.BooleanVar(value=False),
-            'tab': tk.BooleanVar(value=False),
-            'custom': tk.BooleanVar(value=False)
-        }
-        
-        separators = [
-            ("Новая строка", 'newline', '\n'),
-            ("Запятая", 'comma', ','),
-            ("Пробел", 'space', ' '),
-            ("Точка с запятой", 'semicolon', ';'),
-            ("Вертикальная черта", 'pipe', '|'),
-            ("Табуляция", 'tab', '\t'),
-            ("Свой", 'custom', '')
-        ]
-        
-        for label, key, sep in separators:
-            frame_sep = ttk.Frame(frame_separator)
-            frame_sep.pack(side='left', padx=5)
-            cb = ttk.Checkbutton(frame_sep, text=label, variable=self.separator_vars[key])
-            cb.pack(side='left')
-            if key == 'custom':
-                self.entry_custom_separator = ttk.Entry(frame_sep, width=10)
-                self.entry_custom_separator.pack(side='left', padx=5)
-        
-        frame_examples = ttk.Frame(frame_edit)
-        frame_examples.pack(fill='x', padx=5, pady=5)
-        
-        ttk.Label(frame_examples, text="Примеры:").pack(side='left', padx=5)
-        self.label_example1 = ttk.Label(frame_examples, text="", wraplength=700)
-        self.label_example1.pack(side='top', fill='x', padx=5)
-        self.label_example2 = ttk.Label(frame_examples, text="", wraplength=700)
-        self.label_example2.pack(side='top', fill='x', padx=5)
-        
-        # Привязка событий для обновления примеров
-        self.entry_mask_prefix.bind("<KeyRelease>", self.update_example)
-        self.entry_mask_suffix.bind("<KeyRelease>", self.update_example)
-        self.entry_custom_separator.bind("<KeyRelease>", self.update_example)
-        for var in self.separator_vars.values():
-            var.trace_add("write", lambda *args: self.update_example())
-        
-        frame_mask_buttons = ttk.Frame(frame_edit)
-        frame_mask_buttons.pack(fill='x', pady=5)
-        
-        btn_add_mask = ttk.Button(frame_mask_buttons, text="Добавить маску", command=self.add_mask)
-        btn_add_mask.pack(side='left', padx=5)
-        
-        btn_clear_fields = ttk.Button(frame_mask_buttons, text="Очистить поля", command=self.clear_mask_fields)
-        btn_clear_fields.pack(side='left', padx=5)
+        self.text_ip_output = tk.Text(frame_output, yscrollcommand=scrollbar.set, height=10)
+        self.text_ip_output.pack(fill='both', expand=True)
+        scrollbar.config(command=self.text_ip_output.yview)
 
     def update_separator_order(self, key):
-        """Обновление порядка применения разделителей"""
         if self.separator_vars[key].get():
             if key not in self.separator_order:
                 self.separator_order.append(key)
@@ -1521,18 +1460,10 @@ class GUI:
                 self.separator_order.remove(key)
         self.update_example()
 
-    def save_range_mask(self):
-            mask = self.entry_range_mask.get()
-            if self.processor.set_range_mask(mask):
-                messagebox.showinfo("Успех", "Маска диапазона сохранена")
-            else:
-                messagebox.showerror("Ошибка", "Маска должна содержать {start} и {end}")
-
     def update_example(self, event=None):
         prefix = self.entry_mask_prefix.get()
         suffix = self.entry_mask_suffix.get()
         
-        # Формирование разделителя в порядке выбора
         separator = ''
         separator_map = {
             'newline': '\n',
@@ -1549,7 +1480,7 @@ class GUI:
         
         separator_display = separator.replace('\n', '\\n').replace('\t', '\\t')
         if not separator:
-            separator = '\n'  # По умолчанию новая строка
+            separator = '\n'
             separator_display = '\\n'
         
         example_ip1 = "192.168.1.0/24"
@@ -1564,10 +1495,539 @@ class GUI:
         
         self.label_example1.config(text=f"IPv4: {ex1}")
         self.label_example2.config(text=f"IPv6: {ex2} (разделитель: '{separator_display}' между записями)")
-    
+
+    def add_mask(self):
+        name = self.entry_mask_name.get().strip()
+        prefix = self.entry_mask_prefix.get()
+        suffix = self.entry_mask_suffix.get()
+        
+        if not name:
+            messagebox.showwarning("Предупреждение", "Имя маски не может быть пустым")
+            return
+        
+        separator = ''
+        separator_map = {
+            'newline': '\n',
+            'comma': ',',
+            'space': ' ',
+            'semicolon': ';',
+            'pipe': '|',
+            'tab': '\t',
+            'custom': self.entry_custom_separator.get()
+        }
+        
+        for key in self.separator_order:
+            separator += separator_map.get(key, '')
+        
+        if not separator:
+            separator = '\n'
+        
+        if self.processor.add_mask(name, prefix, suffix, separator):
+            messagebox.showinfo("Успех", f"Маска '{name}' успешно добавлена")
+            self.update_mask_list()
+            self.clear_mask_fields()
+        else:
+            messagebox.showerror("Ошибка", "Не удалось добавить маску")
+
+    def edit_mask(self):
+        selection = self.listbox_masks.curselection()
+        if not selection:
+            messagebox.showwarning("Предупреждение", "Не выбрана маска для редактирования")
+            return
+        
+        index = selection[0]
+        mask_name = self.listbox_masks.get(index).split(" (по умолчанию)")[0]
+        
+        mask = next((m for m in self.processor.config['masks'] if m['name'] == mask_name), None)
+        if not mask:
+            messagebox.showerror("Ошибка", "Маска не найдена")
+            return
+        
+        self.entry_mask_name.delete(0, tk.END)
+        self.entry_mask_name.insert(0, mask['name'])
+        self.entry_mask_prefix.delete(0, tk.END)
+        self.entry_mask_prefix.insert(0, mask['prefix'])
+        self.entry_mask_suffix.delete(0, tk.END)
+        self.entry_mask_suffix.insert(0, mask['suffix'])
+        
+        self.separator_order.clear()
+        for var in self.separator_vars.values():
+            var.set(False)
+        
+        separator = mask['separator']
+        separator_map = {
+            '\n': 'newline',
+            ',': 'comma',
+            ' ': 'space',
+            ';': 'semicolon',
+            '|': 'pipe',
+            '\t': 'tab'
+        }
+        
+        temp_separator = separator
+        for char, key in separator_map.items():
+            if char in temp_separator:
+                self.separator_vars[key].set(True)
+                self.separator_order.append(key)
+                temp_separator = temp_separator.replace(char, '', 1)
+        
+        if temp_separator:
+            self.separator_vars['custom'].set(True)
+            self.separator_order.append('custom')
+            self.entry_custom_separator.delete(0, tk.END)
+            self.entry_custom_separator.insert(0, temp_separator)
+        
+        self.update_example()
+
+    def clear_mask_fields(self):
+        self.entry_mask_name.delete(0, tk.END)
+        self.entry_mask_prefix.delete(0, tk.END)
+        self.entry_mask_suffix.delete(0, tk.END)
+        
+        self.separator_order.clear()
+        for key in self.separator_vars:
+            if key == 'newline':
+                self.separator_vars[key].set(True)
+                self.separator_order.append('newline')
+            else:
+                self.separator_vars[key].set(False)
+        self.entry_custom_separator.delete(0, tk.END)
+        
+        self.label_example1.config(text="")
+        self.label_example2.config(text="")
+
+    def update_mask_list(self):
+        self.listbox_masks.delete(0, tk.END)
+        
+        masks = self.processor.config['masks']
+        for mask in masks:
+            default_mark = " (по умолчанию)" if mask['name'] == self.processor.config['default_mask'] else ""
+            self.listbox_masks.insert(tk.END, f"{mask['name']}{default_mark}")
+
+    def set_default_mask(self):
+        selection = self.listbox_masks.curselection()
+        if not selection:
+            messagebox.showwarning("Предупреждение", "Не выбрана маска")
+            return
+        
+        index = selection[0]
+        mask_name = self.listbox_masks.get(index).split(" (по умолчанию)")[0]
+        
+        if self.processor.set_default_mask(mask_name):
+            messagebox.showinfo("Успех", f"Маска '{mask_name}' установлена по умолчанию")
+            self.update_mask_list()
+        else:
+            messagebox.showerror("Ошибка", "Не удалось установить маску по умолчанию")
+
+    def add_local_files(self):
+        files = filedialog.askopenfilenames(title="Выберите файлы")
+        if files:
+            for file in files:
+                if file not in self.selected_files:
+                    self.selected_files.append(file)
+                    self.listbox_files.insert(tk.END, file)
+
+    def clear_local_files(self):
+        self.selected_files = []
+        self.listbox_files.delete(0, tk.END)
+
+    def process_local_files(self):
+        if not self.selected_files:
+            messagebox.showwarning("Предупреждение", "Не выбраны файлы для обработки")
+            return
+        
+        self.text_local_log.delete(1.0, tk.END)
+        
+        selected_mask = self.combo_local_mask.get()
+        save_mode = self.var_save_mode.get()
+        output_file = self.entry_local_output.get()
+        include_ipv4 = self.var_ipv4.get()
+        include_ipv6 = self.var_ipv6.get()
+        
+        use_ranges = self.var_use_ranges.get()
+        use_custom_range = self.var_use_custom_range.get()
+        range_pattern = self.entry_range_pattern.get()
+        
+        if not output_file:
+            output_file = "combined_ips.txt"
+        
+        if use_custom_range:
+            if not self.processor.set_custom_range_pattern(range_pattern):
+                self.log_local("Ошибка: пользовательский шаблон диапазона должен содержать {start} и {end}")
+                return
+        
+        if use_ranges:
+            all_ranges = []
+            for file_path in self.selected_files:
+                self.log_local(f"Обработка файла: {file_path}")
+                ranges = self.processor.process_file_to_range(file_path, include_ipv4, include_ipv6, use_custom_range)
+                if ranges:
+                    self.log_local(f"Найдено диапазонов: {len(ranges)}")
+                    if save_mode == "separate":
+                        output_path = os.path.join(self.processor.output_folder, f"range_{os.path.basename(file_path)}")
+                        success = self.processor.save_results_as_ranges(file_path, output_path, include_ipv4, include_ipv6, use_custom_range)
+                        if success:
+                            self.log_local(f"Диапазоны сохранены в файл: {output_path}")
+                        else:
+                            self.log_local(f"Ошибка при сохранении в файл: {output_path}")
+                    else:
+                        all_ranges.extend(ranges)
+                else:
+                    self.log_local("Диапазоны не найдены")
+            
+            if save_mode == "combined" and all_ranges:
+                all_ranges = list(set(all_ranges))
+                self.log_local(f"Всего уникальных диапазонов: {len(all_ranges)}")
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(all_ranges))
+                    self.log_local(f"Все диапазоны сохранены в файл: {output_path}")
+                except Exception as e:
+                    self.log_local(f"Ошибка при сохранении: {e}")
+        else:
+            all_ips = {'ipv4': [], 'ipv6': []}
+            for file_path in self.selected_files:
+                self.log_local(f"Обработка файла: {file_path}")
+                ips_dict = self.processor.process_file(file_path)
+                if ips_dict['ipv4'] or ips_dict['ipv6']:
+                    self.log_local(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
+                    all_ips['ipv4'].extend(ips_dict['ipv4'])
+                    all_ips['ipv6'].extend(ips_dict['ipv6'])
+                    
+                    if save_mode == "separate":
+                        base_name = os.path.basename(file_path)
+                        output_path = os.path.join(self.processor.output_folder, f"processed_{base_name}")
+                        success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
+                        if success:
+                            self.log_local(f"Результаты сохранены в файл: {output_path}")
+                        else:
+                            self.log_local(f"Ошибка при сохранении в файл: {output_path}")
+                else:
+                    self.log_local("IP-адреса в CIDR формате не найдены")
+            
+            all_ips['ipv4'] = list(set(all_ips['ipv4']))
+            all_ips['ipv6'] = list(set(all_ips['ipv6']))
+            self.log_local(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
+            
+            if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
+                if success:
+                    self.log_local(f"Все IP-адреса сохранены в файл: {output_path}")
+                else:
+                    self.log_local(f"Ошибка при сохранении в файл: {output_path}")
+        
+        self.log_local("\nОбработка завершена")
+
+    def log_local(self, message):
+        self.text_local_log.insert(tk.END, message + "\n")
+        self.text_local_log.see(tk.END)
+
+    def add_url(self):
+        url = self.entry_url.get().strip()
+        if url:
+            if url not in self.selected_urls:
+                self.selected_urls.append(url)
+                self.listbox_urls.insert(tk.END, url)
+            self.entry_url.delete(0, tk.END)
+
+    def remove_url(self):
+        selection = self.listbox_urls.curselection()
+        if selection:
+            index = selection[0]
+            url = self.listbox_urls.get(index)
+            self.selected_urls.remove(url)
+            self.listbox_urls.delete(index)
+
+    def clear_urls(self):
+        self.selected_urls = []
+        self.listbox_urls.delete(0, tk.END)
+
+    def process_urls(self):
+        if not self.selected_urls:
+            messagebox.showwarning("Предупреждение", "Не указаны URL для обработки")
+            return
+        
+        self.text_url_log.delete(1.0, tk.END)
+        
+        selected_mask = self.combo_url_mask.get()
+        save_mode = self.var_url_save_mode.get()
+        output_file = self.entry_url_output.get()
+        include_ipv4 = self.var_url_ipv4.get()
+        include_ipv6 = self.var_url_ipv6.get()
+        
+        use_ranges = self.var_url_use_ranges.get()
+        use_custom_range = self.var_url_use_custom_range.get()
+        range_pattern = self.entry_url_range_pattern.get()
+        
+        if not output_file:
+            output_file = "combined_urls.txt"
+        
+        if use_custom_range:
+            if not self.processor.set_custom_range_pattern(range_pattern):
+                self.log_url("Ошибка: пользовательский шаблон диапазона должен содержать {start} и {end}")
+                return
+        
+        if use_ranges:
+            all_ranges = []
+            for url in self.selected_urls:
+                self.log_url(f"Загрузка файла по URL: {url}")
+                content = self.processor.download_file(url)
+                if content:
+                    ips = self.processor.extract_ips(content)
+                    ranges = []
+                    for ip in ips:
+                        start, end = self.processor.cidr_to_range(ip)
+                        ranges.append(self.processor.format_range(start, end, use_custom_range))
+                    if ranges:
+                        self.log_url(f"Найдено {len(ranges)} диапазонов")
+                        if save_mode == "separate":
+                            url_parts = urlparse(url)
+                            file_name = os.path.basename(url_parts.path) or url_parts.netloc.replace('.', '_') + ".txt"
+                            output_path = os.path.join(self.processor.output_folder, f"range_url_{file_name}")
+                            try:
+                                with open(output_path, 'w', encoding='utf-8') as f:
+                                    f.write('\n'.join(ranges))
+                                self.log_url(f"Диапазоны сохранены в файл: {output_path}")
+                            except Exception as e:
+                                self.log_url(f"Ошибка при сохранении: {e}")
+                        else:
+                            all_ranges.extend(ranges)
+                    else:
+                        self.log_url("Диапазоны не найдены")
+                else:
+                    self.log_url("Ошибка при загрузке файла")
+            
+            if save_mode == "combined" and all_ranges:
+                all_ranges = list(set(all_ranges))
+                self.log_url(f"Всего уникальных диапазонов: {len(all_ranges)}")
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(all_ranges))
+                    self.log_url(f"Все диапазоны сохранены в файл: {output_path}")
+                except Exception as e:
+                    self.log_url(f"Ошибка при сохранении: {e}")
+        else:
+            all_ips = {'ipv4': [], 'ipv6': []}
+            for url in self.selected_urls:
+                self.log_url(f"Загрузка файла по URL: {url}")
+                content = self.processor.download_file(url)
+                if content:
+                    ips = self.processor.extract_ips(content)
+                    ips_dict = {'ipv4': [], 'ipv6': []}
+                    for ip in ips:
+                        network = ipaddress.ip_network(ip, strict=False)
+                        if network.version == 4:
+                            ips_dict['ipv4'].append(ip)
+                        elif network.version == 6:
+                            ips_dict['ipv6'].append(ip)
+                    
+                    if ips_dict['ipv4'] or ips_dict['ipv6']:
+                        self.log_url(f"Найдено IPv4: {len(ips_dict['ipv4'])}, IPv6: {len(ips_dict['ipv6'])}")
+                        all_ips['ipv4'].extend(ips_dict['ipv4'])
+                        all_ips['ipv6'].extend(ips_dict['ipv6'])
+                        
+                        if save_mode == "separate":
+                            url_parts = urlparse(url)
+                            file_name = os.path.basename(url_parts.path) or url_parts.netloc.replace('.', '_') + ".txt"
+                            output_path = os.path.join(self.processor.output_folder, f"url_{file_name}")
+                            success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
+                            if success:
+                                self.log_url(f"Результаты сохранены в файл: {output_path}")
+                            else:
+                                self.log_url(f"Ошибка при сохранении в файл: {output_path}")
+                    else:
+                        self.log_url("IP-адреса в CIDR формате не найдены")
+                else:
+                    self.log_url("Ошибка при загрузке файла")
+            
+            all_ips['ipv4'] = list(set(all_ips['ipv4']))
+            all_ips['ipv6'] = list(set(all_ips['ipv6']))
+            self.log_url(f"\nВсего уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
+            
+            if save_mode == "combined" and (all_ips['ipv4'] or all_ips['ipv6']):
+                output_path = os.path.join(self.processor.output_folder, output_file)
+                success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
+                if success:
+                    self.log_url(f"Все IP-адреса сохранены в файл: {output_path}")
+                else:
+                    self.log_url(f"Ошибка при сохранении в файл: {output_path}")
+        
+        self.log_url("\nОбработка завершена")
+
+    def log_url(self, message):
+        self.text_url_log.insert(tk.END, message + "\n")
+        self.text_url_log.see(tk.END)
+
+    def add_merge_files(self):
+        files = filedialog.askopenfilenames(title="Выберите файлы для объединения")
+        for file in files:
+            if file not in [self.listbox_merge_files.get(i) for i in range(self.listbox_merge_files.size())]:
+                self.listbox_merge_files.insert(tk.END, file)
+
+    def clear_merge_files(self):
+        self.listbox_merge_files.delete(0, tk.END)
+
+    def merge_selected_files(self):
+        files = [self.listbox_merge_files.get(i) for i in range(self.listbox_merge_files.size())]
+        
+        if not files:
+            messagebox.showwarning("Предупреждение", "Не выбраны файлы для объединения")
+            return
+        
+        self.text_merge_log.delete(1.0, tk.END)
+        
+        selected_mask = self.combo_merge_mask.get()
+        output_file = self.entry_merge_output.get()
+        include_ipv4 = self.var_merge_ipv4.get()
+        include_ipv6 = self.var_merge_ipv6.get()
+        
+        use_ranges = self.var_merge_use_ranges.get()
+        use_custom_range = self.var_merge_use_custom_range.get()
+        range_pattern = self.entry_merge_range_pattern.get()
+        
+        if not output_file:
+            output_file = "merged_ips.txt"
+        
+        if use_custom_range:
+            if not self.processor.set_custom_range_pattern(range_pattern):
+                self.log_merge("Ошибка: пользовательский шаблон диапазона должен содержать {start} и {end}")
+                return
+        
+        output_path = os.path.join(self.processor.output_folder, output_file)
+        
+        if use_ranges:
+            all_ranges = []
+            self.log_merge(f"Объединение {len(files)} файлов...")
+            for file_path in files:
+                ranges = self.processor.process_file_to_range(file_path, include_ipv4, include_ipv6, use_custom_range)
+                all_ranges.extend(ranges)
+            
+            all_ranges = list(set(all_ranges))
+            self.log_merge(f"Найдено уникальных диапазонов: {len(all_ranges)}")
+            
+            try:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(all_ranges))
+                self.log_merge(f"Диапазоны успешно объединены и сохранены в: {output_path}")
+            except Exception as e:
+                self.log_merge(f"Ошибка при сохранении: {e}")
+        else:
+            self.log_merge(f"Объединение {len(files)} файлов...")
+            all_ips = {'ipv4': [], 'ipv6': []}
+            for file_path in files:
+                ips_dict = self.processor.process_file(file_path)
+                all_ips['ipv4'].extend(ips_dict['ipv4'])
+                all_ips['ipv6'].extend(ips_dict['ipv6'])
+            
+            all_ips['ipv4'] = list(set(all_ips['ipv4']))
+            all_ips['ipv6'] = list(set(all_ips['ipv6']))
+            self.log_merge(f"Найдено уникальных IP-адресов: IPv4: {len(all_ips['ipv4'])}, IPv6: {len(all_ips['ipv6'])}")
+            
+            success = self.processor.save_results_with_options(all_ips, output_path, selected_mask, include_ipv4, include_ipv6)
+            if success:
+                self.log_merge(f"Файлы успешно объединены и сохранены в: {output_path}")
+            else:
+                self.log_merge("Ошибка при объединении файлов")
+        
+        self.log_merge("\nОбъединение завершено")
+
+    def log_merge(self, message):
+        self.text_merge_log.insert(tk.END, message + "\n")
+        self.text_merge_log.see(tk.END)
+
+    def browse_file(self):
+        if self.var_source.get() == "file":
+            file = filedialog.askopenfilename(title="Выберите файл")
+            if file:
+                self.entry_file_url.delete(0, tk.END)
+                self.entry_file_url.insert(0, file)
+        else:
+            self.entry_file_url.delete(0, tk.END)
+
+    def expand_ips(self):
+        self.text_ip_output.delete(1.0, tk.END)
+        source = self.var_source.get()
+        
+        if source == "text":
+            input_text = self.text_ip_input.get("1.0", tk.END).strip()
+            if not input_text:
+                messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
+                return
+        elif source == "file":
+            file_path = self.entry_file_url.get().strip()
+            if not file_path or not os.path.exists(file_path):
+                messagebox.showwarning("Предупреждение", "Укажите существующий файл")
+                return
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                input_text = f.read()
+        elif source == "url":
+            url = self.entry_file_url.get().strip()
+            if not url:
+                messagebox.showwarning("Предупреждение", "Укажите URL")
+                return
+            input_text = self.processor.download_file(url)
+            if not input_text:
+                self.text_ip_output.insert(tk.END, f"Ошибка загрузки URL: {url}\n")
+                return
+        
+        output_file = self.entry_ip_output.get().strip()
+        output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
+        
+        ips, saved = self.processor.process_input_to_ips(input_text, output_path)
+        
+        if ips:
+            self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
+            
+            if self.var_count_ips.get():
+                cidrs = self.processor.extract_ips(input_text)
+                if cidrs:
+                    self.text_ip_output.insert(tk.END, "Подсчет IP в CIDR:\n")
+                    for cidr in cidrs:
+                        try:
+                            count = self.processor.count_ips_in_cidr(cidr)
+                            self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
+                        except Exception as e:
+                            self.text_ip_output.insert(tk.END, f"Ошибка при подсчете IP для {cidr}: {str(e)}\n")
+                else:
+                    self.text_ip_output.insert(tk.END, "CIDR не найдены для подсчета IP\n")
+            
+            compare_cidr = self.entry_compare_cidr.get().strip()
+            if compare_cidr:
+                compare_cidrs = re.split(r'[,\s]+', compare_cidr)
+                compare_cidrs = [c.strip() for c in compare_cidrs if c.strip()]
+                if compare_cidrs:
+                    self.text_ip_output.insert(tk.END, "\nПересечения с указанными CIDR:\n")
+                    input_cidrs = self.processor.extract_ips(input_text)
+                    has_overlaps = False
+                    for input_cidr in input_cidrs:
+                        for comp_cidr in compare_cidrs:
+                            try:
+                                overlap = self.processor.check_cidr_overlap(input_cidr, comp_cidr)
+                                if overlap:
+                                    self.text_ip_output.insert(tk.END, f"{input_cidr} пересекается с {comp_cidr}: Да\n")
+                                    has_overlaps = True
+                            except Exception as e:
+                                self.text_ip_output.insert(tk.END, f"Ошибка проверки {input_cidr} с {comp_cidr}: {str(e)}\n")
+                    if not has_overlaps:
+                        self.text_ip_output.insert(tk.END, "Пересечений не найдено\n")
+            
+            self.text_ip_output.insert(tk.END, "\nСписок IP-адресов (первые 100):\n")
+            self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
+            if len(ips) > 100:
+                self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
+            if saved:
+                self.text_ip_output.insert(tk.END, f"\nВсе IP сохранены в: {output_path}")
+        else:
+            self.text_ip_output.insert(tk.END, "IP-адреса не найдены")
+
     def start(self):
-        """Запуск графического интерфейса"""
         self.root.mainloop()
+
+# Остальная часть кода (main и другие функции) остается без изменений
+
     
     # Методы для вкладки локальных файлов
     def add_local_files(self):
@@ -2147,82 +2607,6 @@ class GUI:
                 self.entry_file_url.insert(0, file)
         else:
             self.entry_file_url.delete(0, tk.END)
-
-    def expand_ips(self):
-        self.text_ip_output.delete(1.0, tk.END)
-        source = self.var_source.get()
-        
-        if source == "text":
-            input_text = self.text_ip_input.get("1.0", tk.END).strip()
-            if not input_text:
-                messagebox.showwarning("Предупреждение", "Введите CIDR или диапазон")
-                return
-        elif source == "file":
-            file_path = self.entry_file_url.get().strip()
-            if not file_path or not os.path.exists(file_path):
-                messagebox.showwarning("Предупреждение", "Укажите существующий файл")
-                return
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                input_text = f.read()
-        elif source == "url":
-            url = self.entry_file_url.get().strip()
-            if not url:
-                messagebox.showwarning("Предупреждение", "Укажите URL")
-                return
-            input_text = self.processor.download_file(url)
-            if not input_text:
-                self.text_ip_output.insert(tk.END, f"Ошибка загрузки URL: {url}\n")
-                return
-        
-        output_file = self.entry_ip_output.get().strip()
-        output_path = os.path.join(self.processor.output_folder, output_file) if output_file else None
-        
-        ips, saved = self.processor.process_input_to_ips(input_text, output_path)
-        
-        if ips:
-            self.text_ip_output.insert(tk.END, f"Найдено IP-адресов: {len(ips)}\n")
-            
-            if self.var_count_ips.get():
-                cidrs = self.processor.extract_ips(input_text)
-                if cidrs:
-                    self.text_ip_output.insert(tk.END, "Подсчет IP в CIDR:\n")
-                    for cidr in cidrs:
-                        try:
-                            count = self.processor.count_ips_in_cidr(cidr)
-                            self.text_ip_output.insert(tk.END, f"{cidr}: {count} IP-адресов\n")
-                        except Exception as e:
-                            self.text_ip_output.insert(tk.END, f"Ошибка при подсчете IP для {cidr}: {str(e)}\n")
-                else:
-                    self.text_ip_output.insert(tk.END, "CIDR не найдены для подсчета IP\n")
-            
-            compare_cidr = self.entry_compare_cidr.get().strip()
-            if compare_cidr:
-                compare_cidrs = re.split(r'[,\s]+', compare_cidr)
-                compare_cidrs = [c.strip() for c in compare_cidrs if c.strip()]
-                if compare_cidrs:
-                    self.text_ip_output.insert(tk.END, "\nПересечения с указанными CIDR:\n")
-                    input_cidrs = self.processor.extract_ips(input_text)
-                    has_overlaps = False
-                    for input_cidr in input_cidrs:
-                        for comp_cidr in compare_cidrs:
-                            try:
-                                overlap = self.processor.check_cidr_overlap(input_cidr, comp_cidr)
-                                if overlap:
-                                    self.text_ip_output.insert(tk.END, f"{input_cidr} пересекается с {comp_cidr}: Да\n")
-                                    has_overlaps = True
-                            except Exception as e:
-                                self.text_ip_output.insert(tk.END, f"Ошибка проверки {input_cidr} с {comp_cidr}: {str(e)}\n")
-                    if not has_overlaps:
-                        self.text_ip_output.insert(tk.END, "Пересечений не найдено\n")
-            
-            self.text_ip_output.insert(tk.END, "\nСписок IP-адресов (первые 100):\n")
-            self.text_ip_output.insert(tk.END, "\n".join(ips[:100]))
-            if len(ips) > 100:
-                self.text_ip_output.insert(tk.END, "\n... (показаны первые 100 адресов)")
-            if saved:
-                self.text_ip_output.insert(tk.END, f"\nВсе IP сохранены в: {output_path}")
-        else:
-            self.text_ip_output.insert(tk.END, "IP-адреса не найдены")
 
 def main():
     processor = IPCIDRProcessor()
