@@ -1346,6 +1346,113 @@ class GUI:
         self.entry_mask_suffix = ttk.Entry(frame_suffix)
         self.entry_mask_suffix.pack(side='left', fill='x', expand=True, padx=5)
         
+        # Обновленный выбор разделителей с последовательностью
+        frame_separator = ttk.LabelFrame(frame_edit, text="Разделители (выбирайте в порядке применения)")
+        frame_separator.pack(fill='x', padx=5, pady=5)
+        
+        self.separator_vars = {
+            'newline': tk.BooleanVar(value=True),
+            'comma': tk.BooleanVar(value=False),
+            'space': tk.BooleanVar(value=False),
+            'semicolon': tk.BooleanVar(value=False),
+            'pipe': tk.BooleanVar(value=False),
+            'tab': tk.BooleanVar(value=False),
+            'custom': tk.BooleanVar(value=False)
+        }
+        
+        self.separator_order = []  # Список для хранения порядка выбора разделителей
+        
+        separators = [
+            ("Новая строка", 'newline', '\n'),
+            ("Запятая", 'comma', ','),
+            ("Пробел", 'space', ' '),
+            ("Точка с запятой", 'semicolon', ';'),
+            ("Вертикальная черта", 'pipe', '|'),
+            ("Табуляция", 'tab', '\t'),
+            ("Свой", 'custom', '')
+        ]
+        
+        for label, key, sep in separators:
+            frame_sep = ttk.Frame(frame_separator)
+            frame_sep.pack(side='left', padx=5)
+            cb = ttk.Checkbutton(frame_sep, text=label, variable=self.separator_vars[key],
+                               command=lambda k=key: self.update_separator_order(k))
+            cb.pack(side='left')
+            if key == 'custom':
+                self.entry_custom_separator = ttk.Entry(frame_sep, width=10)
+                self.entry_custom_separator.pack(side='left', padx=5)
+        
+        frame_examples = ttk.Frame(frame_edit)
+        frame_examples.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(frame_examples, text="Примеры:").pack(side='left', padx=5)
+        self.label_example1 = ttk.Label(frame_examples, text="", wraplength=700)
+        self.label_example1.pack(side='top', fill='x', padx=5)
+        self.label_example2 = ttk.Label(frame_examples, text="", wraplength=700)
+        self.label_example2.pack(side='top', fill='x', padx=5)
+        
+        self.entry_mask_prefix.bind("<KeyRelease>", self.update_example)
+        self.entry_mask_suffix.bind("<KeyRelease>", self.update_example)
+        self.entry_custom_separator.bind("<KeyRelease>", self.update_example)
+        for var in self.separator_vars.values():
+            var.trace_add("write", lambda *args: self.update_example())
+        
+        frame_mask_buttons = ttk.Frame(frame_edit)
+        frame_mask_buttons.pack(fill='x', pady=5)
+        
+        btn_add_mask = ttk.Button(frame_mask_buttons, text="Добавить маску", command=self.add_mask)
+        btn_add_mask.pack(side='left', padx=5)
+        
+        btn_clear_fields = ttk.Button(frame_mask_buttons, text="Очистить поля", command=self.clear_mask_fields)
+        btn_clear_fields.pack(side='left', padx=5)
+        frame_masks = ttk.LabelFrame(self.tab_settings, text="Доступные маски")
+        frame_masks.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        frame_list = ttk.Frame(frame_masks)
+        frame_list.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        scrollbar = ttk.Scrollbar(frame_list)
+        scrollbar.pack(side='right', fill='y')
+        
+        self.listbox_masks = tk.Listbox(frame_list, yscrollcommand=scrollbar.set)
+        self.listbox_masks.pack(side='left', fill='both', expand=True)
+        scrollbar.config(command=self.listbox_masks.yview)
+        
+        self.update_mask_list()
+        
+        frame_buttons = ttk.Frame(frame_masks)
+        frame_buttons.pack(fill='x', pady=5)
+        
+        btn_edit_mask = ttk.Button(frame_buttons, text="Редактировать маску", command=self.edit_mask)
+        btn_edit_mask.pack(side='left', padx=5)
+        
+        btn_set_default = ttk.Button(frame_buttons, text="Установить по умолчанию", command=self.set_default_mask)
+        btn_set_default.pack(side='left', padx=5)
+        
+        frame_edit = ttk.LabelFrame(self.tab_settings, text="Добавление/изменение маски")
+        frame_edit.pack(fill='x', padx=10, pady=5)
+        
+        frame_name = ttk.Frame(frame_edit)
+        frame_name.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(frame_name, text="Имя маски:").pack(side='left', padx=5)
+        self.entry_mask_name = ttk.Entry(frame_name)
+        self.entry_mask_name.pack(side='left', fill='x', expand=True, padx=5)
+        
+        frame_prefix = ttk.Frame(frame_edit)
+        frame_prefix.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(frame_prefix, text="Префикс:").pack(side='left', padx=5)
+        self.entry_mask_prefix = ttk.Entry(frame_prefix)
+        self.entry_mask_prefix.pack(side='left', fill='x', expand=True, padx=5)
+        
+        frame_suffix = ttk.Frame(frame_edit)
+        frame_suffix.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(frame_suffix, text="Суффикс:").pack(side='left', padx=5)
+        self.entry_mask_suffix = ttk.Entry(frame_suffix)
+        self.entry_mask_suffix.pack(side='left', fill='x', expand=True, padx=5)
+        
         # Обновленный выбор разделителей с поддержкой комбинаций
         frame_separator = ttk.LabelFrame(frame_edit, text="Разделители")
         frame_separator.pack(fill='x', padx=5, pady=5)
@@ -1404,6 +1511,16 @@ class GUI:
         btn_clear_fields = ttk.Button(frame_mask_buttons, text="Очистить поля", command=self.clear_mask_fields)
         btn_clear_fields.pack(side='left', padx=5)
 
+    def update_separator_order(self, key):
+        """Обновление порядка применения разделителей"""
+        if self.separator_vars[key].get():
+            if key not in self.separator_order:
+                self.separator_order.append(key)
+        else:
+            if key in self.separator_order:
+                self.separator_order.remove(key)
+        self.update_example()
+
     def save_range_mask(self):
             mask = self.entry_range_mask.get()
             if self.processor.set_range_mask(mask):
@@ -1415,22 +1532,20 @@ class GUI:
         prefix = self.entry_mask_prefix.get()
         suffix = self.entry_mask_suffix.get()
         
-        # Формирование комбинированного разделителя
+        # Формирование разделителя в порядке выбора
         separator = ''
-        if self.separator_vars['newline'].get():
-            separator += '\n'
-        if self.separator_vars['comma'].get():
-            separator += ','
-        if self.separator_vars['space'].get():
-            separator += ' '
-        if self.separator_vars['semicolon'].get():
-            separator += ';'
-        if self.separator_vars['pipe'].get():
-            separator += '|'
-        if self.separator_vars['tab'].get():
-            separator += '\t'
-        if self.separator_vars['custom'].get():
-            separator += self.entry_custom_separator.get()
+        separator_map = {
+            'newline': '\n',
+            'comma': ',',
+            'space': ' ',
+            'semicolon': ';',
+            'pipe': '|',
+            'tab': '\t',
+            'custom': self.entry_custom_separator.get()
+        }
+        
+        for key in self.separator_order:
+            separator += separator_map.get(key, '')
         
         separator_display = separator.replace('\n', '\\n').replace('\t', '\\t')
         if not separator:
@@ -1440,7 +1555,6 @@ class GUI:
         example_ip1 = "192.168.1.0/24"
         example_ip2 = "2001:db8::/32"
         
-        # Пример с учетом сложных шаблонов
         if '{ip}' in prefix or '{ip}' in suffix:
             ex1 = f"{prefix.replace('{ip}', example_ip1)}{example_ip1}{suffix.replace('{ip}', example_ip1)}"
             ex2 = f"{prefix.replace('{ip}', example_ip2)}{example_ip2}{suffix.replace('{ip}', example_ip2)}"
@@ -1878,22 +1992,19 @@ class GUI:
             messagebox.showwarning("Предупреждение", "Имя маски не может быть пустым")
             return
         
-        # Формирование комбинированного разделителя
         separator = ''
-        if self.separator_vars['newline'].get():
-            separator += '\n'
-        if self.separator_vars['comma'].get():
-            separator += ','
-        if self.separator_vars['space'].get():
-            separator += ' '
-        if self.separator_vars['semicolon'].get():
-            separator += ';'
-        if self.separator_vars['pipe'].get():
-            separator += '|'
-        if self.separator_vars['tab'].get():
-            separator += '\t'
-        if self.separator_vars['custom'].get():
-            separator += self.entry_custom_separator.get()
+        separator_map = {
+            'newline': '\n',
+            'comma': ',',
+            'space': ' ',
+            'semicolon': ';',
+            'pipe': '|',
+            'tab': '\t',
+            'custom': self.entry_custom_separator.get()
+        }
+        
+        for key in self.separator_order:
+            separator += separator_map.get(key, '')
         
         if not separator:
             separator = '\n'  # По умолчанию новая строка
@@ -1904,16 +2015,69 @@ class GUI:
             self.clear_mask_fields()
         else:
             messagebox.showerror("Ошибка", "Не удалось добавить маску")
+
+    def edit_mask(self):
+        selection = self.listbox_masks.curselection()
+        if not selection:
+            messagebox.showwarning("Предупреждение", "Не выбрана маска для редактирования")
+            return
+        
+        index = selection[0]
+        mask_name = self.listbox_masks.get(index).split(" (по умолчанию)")[0]
+        
+        mask = next((m for m in self.processor.config['masks'] if m['name'] == mask_name), None)
+        if not mask:
+            messagebox.showerror("Ошибка", "Маска не найдена")
+            return
+        
+        self.entry_mask_name.delete(0, tk.END)
+        self.entry_mask_name.insert(0, mask['name'])
+        self.entry_mask_prefix.delete(0, tk.END)
+        self.entry_mask_prefix.insert(0, mask['prefix'])
+        self.entry_mask_suffix.delete(0, tk.END)
+        self.entry_mask_suffix.insert(0, mask['suffix'])
+        
+        # Сброс порядка и флажков
+        self.separator_order.clear()
+        for var in self.separator_vars.values():
+            var.set(False)
+        
+        separator = mask['separator']
+        separator_map = {
+            '\n': 'newline',
+            ',': 'comma',
+            ' ': 'space',
+            ';': 'semicolon',
+            '|': 'pipe',
+            '\t': 'tab'
+        }
+        
+        # Разбираем разделитель на компоненты в порядке появления
+        temp_separator = separator
+        for char, key in separator_map.items():
+            if char in temp_separator:
+                self.separator_vars[key].set(True)
+                self.separator_order.append(key)
+                temp_separator = temp_separator.replace(char, '', 1)  # Удаляем только первое вхождение
+        
+        if temp_separator:  # Остаток - пользовательский разделитель
+            self.separator_vars['custom'].set(True)
+            self.separator_order.append('custom')
+            self.entry_custom_separator.delete(0, tk.END)
+            self.entry_custom_separator.insert(0, temp_separator)
+        
+        self.update_example()
     
     def clear_mask_fields(self):
         self.entry_mask_name.delete(0, tk.END)
         self.entry_mask_prefix.delete(0, tk.END)
         self.entry_mask_suffix.delete(0, tk.END)
         
-        # Сбрасываем все флажки разделителей и очищаем пользовательский ввод
+        self.separator_order.clear()
         for key in self.separator_vars:
             if key == 'newline':
-                self.separator_vars[key].set(True)  # По умолчанию оставляем только новую строку
+                self.separator_vars[key].set(True)
+                self.separator_order.append('newline')
             else:
                 self.separator_vars[key].set(False)
         self.entry_custom_separator.delete(0, tk.END)
