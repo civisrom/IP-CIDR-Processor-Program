@@ -987,7 +987,6 @@ class ConsoleUI:
                 print("Неверный выбор. Пожалуйста, введите число от 1 до 4.")
                 input("Нажмите Enter для продолжения...")
 
-
 class GUI:
     def __init__(self, processor):
         self.processor = processor
@@ -1007,12 +1006,14 @@ class GUI:
         self.tab_merge = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
         self.tab_ip_expansion = ttk.Frame(self.notebook)
+        self.tab_cidr_optimization = ttk.Frame(self.notebook)  # Новая вкладка
         
         self.notebook.add(self.tab_local, text="Локальные файлы")
         self.notebook.add(self.tab_url, text="URL файлы")
         self.notebook.add(self.tab_merge, text="Объединение")
         self.notebook.add(self.tab_settings, text="Настройки")
         self.notebook.add(self.tab_ip_expansion, text="Разложение IP")
+        self.notebook.add(self.tab_cidr_optimization, text="Оптимизация CIDR")
 
         # Создаем интерфейс для каждой вкладки
         self.setup_local_tab()
@@ -1020,7 +1021,9 @@ class GUI:
         self.setup_merge_tab()
         self.setup_settings_tab()
         self.setup_ip_expansion_tab()
+        self.setup_cidr_optimization_tab()
 
+    # Существующие методы остаются без изменений, добавляем только новую вкладку
     def setup_local_tab(self):
         frame_files = ttk.LabelFrame(self.tab_local, text="Выбор файлов")
         frame_files.pack(fill='both', expand=True, padx=10, pady=5)
@@ -1451,6 +1454,82 @@ class GUI:
         self.text_ip_output.pack(fill='both', expand=True)
         scrollbar.config(command=self.text_ip_output.yview)
 
+    # Новая вкладка "Оптимизация CIDR"
+    def setup_cidr_optimization_tab(self):
+        frame_input = ttk.LabelFrame(self.tab_cidr_optimization, text="Ввод данных")
+        frame_input.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        # Выбор источника
+        frame_source = ttk.Frame(frame_input)
+        frame_source.pack(fill='x', padx=5, pady=5)
+        
+        self.var_opt_source = tk.StringVar(value="text")
+        ttk.Radiobutton(frame_source, text="Текст", variable=self.var_opt_source, value="text").pack(side='left', padx=5)
+        ttk.Radiobutton(frame_source, text="Локальный файл", variable=self.var_opt_source, value="file").pack(side='left', padx=5)
+        ttk.Radiobutton(frame_source, text="URL", variable=self.var_opt_source, value="url").pack(side='left', padx=5)
+        
+        # Поле для текста
+        self.text_opt_input = tk.Text(frame_input, height=5)
+        self.text_opt_input.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Поле для файла или URL
+        frame_file_url = ttk.Frame(frame_input)
+        frame_file_url.pack(fill='x', padx=5, pady=5)
+        self.entry_opt_file_url = ttk.Entry(frame_file_url)
+        self.entry_opt_file_url.pack(side='left', fill='x', expand=True, padx=5)
+        btn_browse = ttk.Button(frame_file_url, text="Обзор", command=self.browse_opt_file)
+        btn_browse.pack(side='left', padx=5)
+        
+        # Настройки оптимизации
+        frame_settings = ttk.LabelFrame(self.tab_cidr_optimization, text="Настройки оптимизации")
+        frame_settings.pack(fill='x', padx=10, pady=5)
+        
+        # Выбор типов IP
+        frame_ip_types = ttk.Frame(frame_settings)
+        frame_ip_types.pack(fill='x', padx=5, pady=5)
+        ttk.Label(frame_ip_types, text="Сохранять:").pack(side='left', padx=5)
+        self.var_opt_ipv4 = tk.BooleanVar(value=True)
+        self.var_opt_ipv6 = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame_ip_types, text="IPv4", variable=self.var_opt_ipv4).pack(side='left', padx=5)
+        ttk.Checkbutton(frame_ip_types, text="IPv6", variable=self.var_opt_ipv6).pack(side='left', padx=5)
+        
+        # Параметры оптимизации
+        frame_opt_params = ttk.Frame(frame_settings)
+        frame_opt_params.pack(fill='x', padx=5, pady=5)
+        self.var_opt_strict = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame_opt_params, text="Строгая оптимизация (только точные объединения)", variable=self.var_opt_strict).pack(side='left', padx=5)
+        self.var_opt_summary = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame_opt_params, text="Показать сводку до/после", variable=self.var_opt_summary).pack(side='left', padx=5)
+        
+        # Выбор маски
+        frame_mask = ttk.Frame(frame_settings)
+        frame_mask.pack(fill='x', padx=5, pady=5)
+        ttk.Label(frame_mask, text="Маска:").pack(side='left', padx=5)
+        self.combo_opt_mask = ttk.Combobox(frame_mask, values=["none"] + self.processor.get_masks(), state="readonly")
+        self.combo_opt_mask.pack(side='left', fill='x', expand=True, padx=5)
+        self.combo_opt_mask.set(self.processor.config['default_mask'])
+        
+        # Выходной файл
+        frame_output = ttk.Frame(frame_settings)
+        frame_output.pack(fill='x', padx=5, pady=5)
+        ttk.Label(frame_output, text="Выходной файл:").pack(side='left', padx=5)
+        self.entry_opt_output = ttk.Entry(frame_output)
+        self.entry_opt_output.pack(side='left', fill='x', expand=True, padx=5)
+        self.entry_opt_output.insert(0, "optimized_cidr.txt")
+        
+        btn_optimize = ttk.Button(frame_settings, text="Оптимизировать CIDR", command=self.optimize_cidr)
+        btn_optimize.pack(side='left', padx=5)
+        
+        # Лог и результат
+        frame_result = ttk.LabelFrame(self.tab_cidr_optimization, text="Результат")
+        frame_result.pack(fill='both', expand=True, padx=10, pady=5)
+        scrollbar = ttk.Scrollbar(frame_result)
+        scrollbar.pack(side='right', fill='y')
+        self.text_opt_result = tk.Text(frame_result, yscrollcommand=scrollbar.set, height=10)
+        self.text_opt_result.pack(fill='both', expand=True)
+        scrollbar.config(command=self.text_opt_result.yview)
+
+    # Методы для существующей функциональности
     def update_separator_order(self, key):
         if self.separator_vars[key].get():
             if key not in self.separator_order:
@@ -2023,11 +2102,164 @@ class GUI:
         else:
             self.text_ip_output.insert(tk.END, "IP-адреса не найдены")
 
+    # Новые методы для вкладки "Оптимизация CIDR"
+    def browse_opt_file(self):
+        if self.var_opt_source.get() == "file":
+            file = filedialog.askopenfilename(title="Выберите файл")
+            if file:
+                self.entry_opt_file_url.delete(0, tk.END)
+                self.entry_opt_file_url.insert(0, file)
+        else:
+            self.entry_opt_file_url.delete(0, tk.END)
+
+    def optimize_cidr(self):
+        self.text_opt_result.delete(1.0, tk.END)
+        source = self.var_opt_source.get()
+        
+        # Получение данных
+        if source == "text":
+            input_text = self.text_opt_input.get("1.0", tk.END).strip()
+            if not input_text:
+                messagebox.showwarning("Предупреждение", "Введите CIDR для оптимизации")
+                return
+        elif source == "file":
+            file_path = self.entry_opt_file_url.get().strip()
+            if not file_path or not os.path.exists(file_path):
+                messagebox.showwarning("Предупреждение", "Укажите существующий файл")
+                return
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                input_text = f.read()
+        elif source == "url":
+            url = self.entry_opt_file_url.get().strip()
+            if not url:
+                messagebox.showwarning("Предупреждение", "Укажите URL")
+                return
+            input_text = self.processor.download_file(url)
+            if not input_text:
+                self.text_opt_result.insert(tk.END, f"Ошибка загрузки URL: {url}\n")
+                return
+        
+        # Извлечение CIDR
+        cidrs = self.processor.extract_ips(input_text)
+        if not cidrs:
+            self.text_opt_result.insert(tk.END, "CIDR не найдены в данных\n")
+            return
+        
+        # Разделение на IPv4 и IPv6
+        ipv4_cidrs = [c for c in cidrs if ipaddress.ip_network(c, strict=False).version == 4]
+        ipv6_cidrs = [c for c in cidrs if ipaddress.ip_network(c, strict=False).version == 6]
+        
+        include_ipv4 = self.var_opt_ipv4.get()
+        include_ipv6 = self.var_opt_ipv6.get()
+        strict_mode = self.var_opt_strict.get()
+        show_summary = self.var_opt_summary.get()
+        
+        # Оптимизация
+        optimized_ipv4 = self.optimize_cidr_list(ipv4_cidrs, strict_mode) if include_ipv4 and ipv4_cidrs else []
+        optimized_ipv6 = self.optimize_cidr_list(ipv6_cidrs, strict_mode) if include_ipv6 and ipv6_cidrs else []
+        
+        # Вывод сводки
+        if show_summary:
+            self.text_opt_result.insert(tk.END, f"До оптимизации:\n")
+            self.text_opt_result.insert(tk.END, f"IPv4 подсетей: {len(ipv4_cidrs)}\n")
+            self.text_opt_result.insert(tk.END, f"IPv6 подсетей: {len(ipv6_cidrs)}\n")
+            self.text_opt_result.insert(tk.END, f"После оптимизации:\n")
+            self.text_opt_result.insert(tk.END, f"IPv4 подсетей: {len(optimized_ipv4)}\n")
+            self.text_opt_result.insert(tk.END, f"IPv6 подсетей: {len(optimized_ipv6)}\n\n")
+        
+        # Вывод результата
+        optimized_cidrs = optimized_ipv4 + optimized_ipv6
+        self.text_opt_result.insert(tk.END, "Оптимизированные CIDR (первые 100):\n")
+        self.text_opt_result.insert(tk.END, "\n".join(optimized_cidrs[:100]))
+        if len(optimized_cidrs) > 100:
+            self.text_opt_result.insert(tk.END, "\n... (показаны первые 100 подсетей)")
+        
+        # Сохранение в файл
+        output_file = self.entry_opt_output.get().strip()
+        if output_file:
+            output_path = os.path.join(self.processor.output_folder, output_file)
+            selected_mask = self.combo_opt_mask.get()
+            ips_dict = {'ipv4': optimized_ipv4 if include_ipv4 else [], 'ipv6': optimized_ipv6 if include_ipv6 else []}
+            success = self.processor.save_results_with_options(ips_dict, output_path, selected_mask, include_ipv4, include_ipv6)
+            if success:
+                self.text_opt_result.insert(tk.END, f"\nРезультат сохранен в: {output_path}")
+            else:
+                self.text_opt_result.insert(tk.END, f"\nОшибка при сохранении в файл: {output_path}")
+        
+        self.text_opt_result.insert(tk.END, "\nОптимизация завершена")
+
+    def optimize_cidr_list(self, cidr_list, strict_mode=True):
+        """
+        Оптимизация списка CIDR-подсетей: объединение смежных и пересекающихся подсетей.
+        """
+        if not cidr_list:
+            return []
+        
+        # Преобразование строк в объекты ip_network
+        networks = [ipaddress.ip_network(cidr, strict=False) for cidr in cidr_list]
+        networks.sort(key=lambda n: (n.network_address, -n.prefixlen))  # Сортировка по адресу и убыванию маски
+        
+        # Инициализация результата
+        optimized = []
+        
+        for net in networks:
+            if not optimized:
+                optimized.append(net)
+                continue
+            
+            merged = False
+            i = 0
+            while i < len(optimized):
+                current = optimized[i]
+                
+                # Проверка на пересечение или смежность
+                if (current.overlaps(net) or 
+                    (not strict_mode and 
+                     (current.network_address == net.broadcast_address + 1 or 
+                      net.network_address == current.broadcast_address + 1))):
+                    # Объединяем подсети
+                    try:
+                        supernet = ipaddress.collapse_addresses([current, net])
+                        optimized[i:i+1] = supernet  # Заменяем текущую подсеть объединенной
+                        merged = True
+                        break
+                    except ValueError:
+                        # Если объединение невозможно, оставляем как есть
+                        i += 1
+                        continue
+                i += 1
+            
+            if not merged:
+                optimized.append(net)
+        
+        # Повторная оптимизация для учета всех возможных объединений
+        while True:
+            initial_len = len(optimized)
+            temp = []
+            i = 0
+            while i < len(optimized):
+                if i + 1 < len(optimized):
+                    try:
+                        supernet = ipaddress.collapse_addresses([optimized[i], optimized[i + 1]])
+                        temp.extend(supernet)
+                        i += 2
+                    except ValueError:
+                        temp.append(optimized[i])
+                        i += 1
+                else:
+                    temp.append(optimized[i])
+                    i += 1
+            optimized = temp
+            if len(optimized) == initial_len:
+                break
+        
+        # Преобразование обратно в строки
+        return [str(net) for net in optimized]
+
     def start(self):
         self.root.mainloop()
 
 # Остальная часть кода (main и другие функции) остается без изменений
-
     
     # Методы для вкладки локальных файлов
     def add_local_files(self):
