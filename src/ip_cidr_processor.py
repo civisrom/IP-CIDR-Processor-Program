@@ -15,8 +15,45 @@ import platform
 
 class IPCIDRProcessor:
     def __init__(self):
-            self.ip_pattern_v4 = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b')
-            self.ip_pattern_v6 = re.compile(r'(?:(?:[0-9a-fA-F]{1,4}:){0,7}(?::[0-9a-fA-F]{1,4}){0,7}|(?:[0-9a-fA-F]{1,4}:){0,6}:(?::[0-9a-fA-F]{1,4}){0,6})/\d{1,3}')
+            self.ip_pattern_v4 = re.compile(
+                r'\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+                r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+                r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+                r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'
+                r'/(3[0-2]|[12]?[0-9])\b'
+            )
+            self.ip_pattern_v6 = re.compile(
+                r'\b(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|'  # 1:2:3:4:5:6:7:8
+                r'([0-9a-fA-F]{1,4}:){1,7}:|'                    # 1::  1:2:3:4:5:6:7::
+                r'([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|'    # 1::8  1:2:3:4:5:6::8
+                r'([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|'  # 1::7:8  1:2:3:4:5::7:8
+                r'([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|'  # 1::6:7:8  1:2:3:4::6:7:8
+                r'([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|'  # 1::5:6:7:8  1:2:3::5:6:7:8
+                r'([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|'  # 1::4:5:6:7:8  1:2::4:5:6:7:8
+                r'[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|'       # 1::3:4:5:6:7:8
+                r':((:[0-9a-fA-F]{1,4}){1,7}|:))'                     # ::2:3:4:5:6:7:8  ::
+                r'/(12[0-8]|1[01][0-9]|[1-9][0-9]|[0-9])\b'           # /128 диапазон
+            )
+            # Добавим дополнительный паттерн для IPv4 без префикса, чтобы обрабатывать их как /32
+            self.ip_single_v4 = re.compile(
+                r'\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+                r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+                r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+                r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
+            )
+            # Добавим дополнительный паттерн для IPv6 без префикса, чтобы обрабатывать их как /128
+            self.ip_single_v6 = re.compile(
+                r'\b(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|'
+                r'([0-9a-fA-F]{1,4}:){1,7}:|'
+                r'([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|'
+                r'([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|'
+                r'([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|'
+                r'([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|'
+                r'([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|'
+                r'[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|'
+                r':((:[0-9a-fA-F]{1,4}){1,7}|:))\b'
+            )
+            
             self.range_mask = "{start}-{end}"  # Маска по умолчанию для диапазонов
             self.custom_range_pattern = None   # Пользовательский шаблон для диапазонов
             self.config_file = 'ip_cidr_config.yaml'
@@ -136,17 +173,34 @@ class IPCIDRProcessor:
             return False
     
     def extract_ips(self, text):
-        """Extract and validate IP addresses in CIDR format from text"""
-        potential_ips_v4 = self.ip_pattern_v4.findall(text)
-        potential_ips_v6 = self.ip_pattern_v6.findall(text)
-        potential_ips = potential_ips_v4 + potential_ips_v6
+        """Извлечение CIDR из текста с учетом IPv4 и IPv6"""
+        # Находим все CIDR IPv4 и IPv6 в тексте
+        cidrs = []
         
-        valid_ips = []
-        for ip_cidr in potential_ips:
-            if self.validate_ip_cidr(ip_cidr):
-                valid_ips.append(ip_cidr)
+        # Поиск IPv4 CIDR
+        for match in self.ip_pattern_v4.finditer(text):
+            cidrs.append(match.group(0))
+            
+        # Поиск IPv6 CIDR
+        for match in self.ip_pattern_v6.finditer(text):
+            cidrs.append(match.group(0))
+            
+        # Поиск одиночных IPv4 и добавление их как /32
+        for match in self.ip_single_v4.finditer(text):
+            ip = match.group(0)
+            # Проверяем, что этот IP еще не был найден как часть CIDR
+            if not any(ip == cidr.split('/')[0] for cidr in cidrs):
+                cidrs.append(f"{ip}/32")
+                
+        # Поиск одиночных IPv6 и добавление их как /128
+        for match in self.ip_single_v6.finditer(text):
+            ip = match.group(0)
+            # Проверяем, что этот IP еще не был найден как часть CIDR
+            if not any(ip == cidr.split('/')[0] for cidr in cidrs):
+                cidrs.append(f"{ip}/128")
         
-        return valid_ips
+        # Удаляем дубликаты и возвращаем результат
+        return list(set(cidrs))
 
     def process_file(self, file_path):
         """Process file and extract IP addresses"""
@@ -252,58 +306,160 @@ class IPCIDRProcessor:
         result = [str(net) for net in optimized_ipv4 + optimized_ipv6]
         return result
     
+class IPCIDRProcessor:
+    def __init__(self):
+        # ... существующий код ...
+        # Улучшенные регулярные выражения для более точного поиска CIDR
+        self.ip_pattern_v4 = re.compile(
+            r'\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'
+            r'/(3[0-2]|[12]?[0-9])\b'
+        )
+        self.ip_pattern_v6 = re.compile(
+            r'\b(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|'  # 1:2:3:4:5:6:7:8
+            r'([0-9a-fA-F]{1,4}:){1,7}:|'                    # 1::  1:2:3:4:5:6:7::
+            r'([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|'    # 1::8  1:2:3:4:5:6::8
+            r'([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|'  # 1::7:8  1:2:3:4:5::7:8
+            r'([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|'  # 1::6:7:8  1:2:3:4::6:7:8
+            r'([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|'  # 1::5:6:7:8  1:2:3::5:6:7:8
+            r'([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|'  # 1::4:5:6:7:8  1:2::4:5:6:7:8
+            r'[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|'       # 1::3:4:5:6:7:8
+            r':((:[0-9a-fA-F]{1,4}){1,7}|:))'                     # ::2:3:4:5:6:7:8  ::
+            r'/(12[0-8]|1[01][0-9]|[1-9][0-9]|[0-9])\b'           # /128 диапазон
+        )
+        # Добавим дополнительный паттерн для IPv4 без префикса, чтобы обрабатывать их как /32
+        self.ip_single_v4 = re.compile(
+            r'\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
+        )
+        # Добавим дополнительный паттерн для IPv6 без префикса, чтобы обрабатывать их как /128
+        self.ip_single_v6 = re.compile(
+            r'\b(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,7}:|'
+            r'([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|'
+            r'([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|'
+            r'([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|'
+            r'[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|'
+            r':((:[0-9a-fA-F]{1,4}){1,7}|:))\b'
+        )
+
+    def extract_ips(self, text):
+        """Извлечение CIDR из текста с учетом IPv4 и IPv6"""
+        # Находим все CIDR IPv4 и IPv6 в тексте
+        cidrs = []
+        
+        # Поиск IPv4 CIDR
+        for match in self.ip_pattern_v4.finditer(text):
+            cidrs.append(match.group(0))
+            
+        # Поиск IPv6 CIDR
+        for match in self.ip_pattern_v6.finditer(text):
+            cidrs.append(match.group(0))
+            
+        # Поиск одиночных IPv4 и добавление их как /32
+        for match in self.ip_single_v4.finditer(text):
+            ip = match.group(0)
+            # Проверяем, что этот IP еще не был найден как часть CIDR
+            if not any(ip == cidr.split('/')[0] for cidr in cidrs):
+                cidrs.append(f"{ip}/32")
+                
+        # Поиск одиночных IPv6 и добавление их как /128
+        for match in self.ip_single_v6.finditer(text):
+            ip = match.group(0)
+            # Проверяем, что этот IP еще не был найден как часть CIDR
+            if not any(ip == cidr.split('/')[0] for cidr in cidrs):
+                cidrs.append(f"{ip}/128")
+        
+        # Удаляем дубликаты и возвращаем результат
+        return list(set(cidrs))
+
     def _consolidate_networks(self, networks):
-            if not networks:
+        """Оптимизация сетей с использованием встроенных методов ipaddress"""
+        if not networks:
+            return []
+        
+        try:
+            # Преобразуем строки CIDR в объекты ipaddress.ip_network
+            ip_networks = []
+            for n in networks:
+                try:
+                    net = ipaddress.ip_network(n.strip(), strict=False)
+                    ip_networks.append(net)
+                except ValueError as e:
+                    print(f"Пропуск некорректной сети {n}: {e}")
+                    continue
+            
+            # Сортировка и объединение с использованием collapse_addresses
+            sorted_nets = sorted(
+                ip_networks,
+                key=lambda x: (x.version, x.network_address)
+            )
+            
+            # Возвращаем список строк
+            return [str(net) for net in ipaddress.collapse_addresses(sorted_nets)]
+        except Exception as e:
+            print(f"Ошибка при объединении сетей: {e}")
+            return networks
+
+    def multi_stage_optimization(self, cidr_list):
+        """Многоэтапная оптимизация CIDR"""
+        if not cidr_list:
+            return []
+            
+        try:
+            # Этап 1: Первичная очистка списка
+            clean_list = []
+            for cidr in cidr_list:
+                cidr = cidr.strip()
+                if cidr:
+                    try:
+                        # Проверка корректности CIDR
+                        _ = ipaddress.ip_network(cidr, strict=False)
+                        clean_list.append(cidr)
+                    except ValueError:
+                        # Пропускаем некорректные CIDR
+                        print(f"Пропуск некорректного CIDR: {cidr}")
+                        continue
+            
+            if not clean_list:
                 return []
-    
-            # Сортировка сетей
-            sorted_nets = sorted(networks, key=lambda net: (net.network_address, net.prefixlen))
-    
-            # Инициализация оптимизированного списка
-            optimized = sorted_nets.copy()
-            changed = True
-            while changed:
-                changed = False
-                new_optimized = []
-                i = 0
-                while i < len(optimized):
-                    current = optimized[i]
-                    if new_optimized:
-                        last = new_optimized[-1]
-                        # Проверка на возможность слияния текущей сети с последней
-                        if current.subnet_of(last):
-                            # Текущая сеть уже покрыта
-                            i += 1
-                            continue
-                        elif last.network_address <= current.network_address and last.broadcast_address >= current.broadcast_address:
-                            # Текущая сеть уже покрыта
-                            i += 1
-                            continue
-                        elif last.prefixlen == current.prefixlen:
-                            try:
-                                # Проверка на соседство
-                                if last.broadcast_address + 1 == current.network_address:
-                                    # Они соседние
-                                    supernet = ipaddress.ip_network(f"{last.network_address}/{last.prefixlen-1}", strict=False)
-                                    if supernet.network_address == last.network_address and supernet.broadcast_address == current.broadcast_address:
-                                        new_optimized[-1] = supernet
-                                        i += 1
-                                        changed = True
-                                        continue
-                            except ValueError:
-                                pass
-                    # Если слияние не произошло, добавляем текущую сеть
-                    new_optimized.append(current)
-                    i += 1
-    
-                # Проверка на изменения
-                if new_optimized != optimized:
-                    optimized = new_optimized
-                    changed = True
-                else:
-                    break
-    
-            return optimized
+                
+            # Этап 2: Объединение подсетей
+            optimized = self._consolidate_networks(clean_list)
+            
+            # Этап 3: Дополнительная проверка на включение
+            final_nets = []
+            for net_str in optimized:
+                net_obj = ipaddress.ip_network(net_str, strict=False)
+                is_subnet = False
+                new_final_nets = []
+                
+                for fn in final_nets:
+                    fn_obj = ipaddress.ip_network(fn, strict=False)
+                    # Если текущая сеть является подсетью существующей, пропускаем её
+                    if net_obj.subnet_of(fn_obj):
+                        is_subnet = True
+                        break
+                    # Если существующая сеть является подсетью текущей, заменяем её
+                    elif fn_obj.subnet_of(net_obj):
+                        continue
+                    new_final_nets.append(fn)
+                
+                if not is_subnet:
+                    new_final_nets.append(str(net_obj))
+                final_nets = new_final_nets
+            
+            # Этап 4: Сортировка и повторное объединение
+            return self._consolidate_networks(final_nets)
+        except Exception as e:
+            print(f"Ошибка при многоэтапной оптимизации: {e}")
+            return cidr_list  # В случае ошибки возвращаем исходный список
 
     def download_file(self, url):
         """Загрузка файла по URL"""
@@ -1456,78 +1612,376 @@ class GUI:
 
     # Новая вкладка "Оптимизация CIDR"
     def setup_cidr_optimization_tab(self):
-        frame_input = ttk.LabelFrame(self.tab_cidr_optimization, text="Ввод данных")
-        frame_input.pack(fill='both', expand=True, padx=10, pady=5)
+        """Настройка вкладки оптимизации CIDR с улучшенным интерфейсом и обработкой ошибок"""
+        # Создаем основную структуру с использованием paned window для лучшего UX
+        paned = ttk.PanedWindow(self.tab_cidr_optimization, orient=tk.VERTICAL)
+        paned.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Выбор источника
-        frame_source = ttk.Frame(frame_input)
-        frame_source.pack(fill='x', padx=5, pady=5)
+        # ======= ВЕРХНЯЯ ПАНЕЛЬ: ВВОД ДАННЫХ =======
+        frame_input = ttk.LabelFrame(paned, text="Ввод данных")
+        paned.add(frame_input, weight=40)
+    
+        # Создаем вложенный фрейм для опций источника данных
+        frame_sources = ttk.Frame(frame_input)
+        frame_sources.pack(fill='x', padx=5, pady=5)
         
+        # Выбор источника данных с лейблом
+        ttk.Label(frame_sources, text="Источник данных:").pack(side='left', padx=(0, 10))
         self.var_opt_source = tk.StringVar(value="text")
-        ttk.Radiobutton(frame_source, text="Текст", variable=self.var_opt_source, value="text").pack(side='left', padx=5)
-        ttk.Radiobutton(frame_source, text="Локальный файл", variable=self.var_opt_source, value="file").pack(side='left', padx=5)
-        ttk.Radiobutton(frame_source, text="URL", variable=self.var_opt_source, value="url").pack(side='left', padx=5)
         
-        # Поле для текста
-        self.text_opt_input = tk.Text(frame_input, height=5)
-        self.text_opt_input.pack(fill='both', expand=True, padx=5, pady=5)
+        # Радиокнопки в горизонтальном расположении
+        sources = [("Текст", "text"), ("Файл", "file"), ("URL", "url")]
+        for text, value in sources:
+            ttk.Radiobutton(
+                frame_sources, 
+                text=text, 
+                variable=self.var_opt_source, 
+                value=value,
+                command=self._toggle_input_mode  # Добавляем обработчик для переключения режимов ввода
+            ).pack(side='left', padx=5)
         
-        # Поле для файла или URL
-        frame_file_url = ttk.Frame(frame_input)
-        frame_file_url.pack(fill='x', padx=5, pady=5)
-        self.entry_opt_file_url = ttk.Entry(frame_file_url)
-        self.entry_opt_file_url.pack(side='left', fill='x', expand=True, padx=5)
-        btn_browse = ttk.Button(frame_file_url, text="Обзор", command=self.browse_opt_file)
-        btn_browse.pack(side='left', padx=5)
+        # Создаем фрейм для контейнера ввода (будет содержать все поля ввода)
+        self.frame_input_container = ttk.Frame(frame_input)
+        self.frame_input_container.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Настройки оптимизации
-        frame_settings = ttk.LabelFrame(self.tab_cidr_optimization, text="Настройки оптимизации")
-        frame_settings.pack(fill='x', padx=10, pady=5)
+        # Поле для текстового ввода (изначально видимое)
+        self.frame_text_input = ttk.Frame(self.frame_input_container)
+        self.frame_text_input.pack(fill='both', expand=True)
         
-        # Выбор типов IP
-        frame_ip_types = ttk.Frame(frame_settings)
-        frame_ip_types.pack(fill='x', padx=5, pady=5)
-        ttk.Label(frame_ip_types, text="Сохранять:").pack(side='left', padx=5)
+        # Текстовое поле с полосой прокрутки
+        self.text_opt_input = tk.Text(self.frame_text_input, height=8)
+        scrollbar_input = ttk.Scrollbar(self.frame_text_input, command=self.text_opt_input.yview)
+        self.text_opt_input.configure(yscrollcommand=scrollbar_input.set)
+        self.text_opt_input.pack(side='left', fill='both', expand=True)
+        scrollbar_input.pack(side='right', fill='y')
+        
+        # Добавляем контекстное меню для текстового поля
+        self._add_text_context_menu(self.text_opt_input)
+        
+        # Фрейм для ввода файла/URL (изначально скрытый)
+        self.frame_path_input = ttk.Frame(self.frame_input_container)
+        
+        # Поля для файла/URL
+        ttk.Label(self.frame_path_input, text="Путь:").pack(side='left', padx=(0, 5))
+        self.entry_opt_path = ttk.Entry(self.frame_path_input)
+        self.entry_opt_path.pack(side='left', fill='x', expand=True, padx=5)
+        
+        # Кнопки для браузера файлов и предпросмотра
+        self.btn_browse = ttk.Button(self.frame_path_input, text="Обзор", command=self.browse_opt_file)
+        self.btn_browse.pack(side='left', padx=5)
+        self.btn_preview = ttk.Button(self.frame_path_input, text="Предпросмотр", command=self._preview_source)
+        self.btn_preview.pack(side='left', padx=5)
+        
+        # ======= ЦЕНТРАЛЬНАЯ ПАНЕЛЬ: НАСТРОЙКИ =======
+        frame_settings = ttk.LabelFrame(paned, text="Настройки обработки")
+        paned.add(frame_settings, weight=20)
+        
+        # Создаем левый и правый фреймы для настроек
+        frame_left = ttk.Frame(frame_settings)
+        frame_left.pack(side='left', fill='both', expand=True, padx=10, pady=5)
+        
+        frame_right = ttk.Frame(frame_settings)
+        frame_right.pack(side='right', fill='both', expand=True, padx=10, pady=5)
+        
+        # Левый фрейм: версии IP и режим
+        # Версии IP
+        frame_ip_versions = ttk.LabelFrame(frame_left, text="Версии IP")
+        frame_ip_versions.pack(fill='x', pady=5)
+        
         self.var_opt_ipv4 = tk.BooleanVar(value=True)
         self.var_opt_ipv6 = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame_ip_types, text="IPv4", variable=self.var_opt_ipv4).pack(side='left', padx=5)
-        ttk.Checkbutton(frame_ip_types, text="IPv6", variable=self.var_opt_ipv6).pack(side='left', padx=5)
+        ttk.Checkbutton(frame_ip_versions, text="IPv4", variable=self.var_opt_ipv4).pack(side='left', padx=10)
+        ttk.Checkbutton(frame_ip_versions, text="IPv6", variable=self.var_opt_ipv6).pack(side='left', padx=10)
         
-        # Параметры оптимизации
-        frame_opt_params = ttk.Frame(frame_settings)
-        frame_opt_params.pack(fill='x', padx=5, pady=5)
-        self.var_opt_strict = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame_opt_params, text="Строгая оптимизация (только точные объединения)", variable=self.var_opt_strict).pack(side='left', padx=5)
-        self.var_opt_summary = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame_opt_params, text="Показать сводку до/после", variable=self.var_opt_summary).pack(side='left', padx=5)
+        # Режим оптимизации
+        frame_mode = ttk.LabelFrame(frame_left, text="Режим оптимизации")
+        frame_mode.pack(fill='x', pady=5)
         
-        # Выбор маски
-        frame_mask = ttk.Frame(frame_settings)
-        frame_mask.pack(fill='x', padx=5, pady=5)
-        ttk.Label(frame_mask, text="Маска:").pack(side='left', padx=5)
-        self.combo_opt_mask = ttk.Combobox(frame_mask, values=["none"] + self.processor.get_masks(), state="readonly")
-        self.combo_opt_mask.pack(side='left', fill='x', expand=True, padx=5)
-        self.combo_opt_mask.set(self.processor.config['default_mask'])
+        self.var_opt_mode = tk.StringVar(value="aggressive")
+        mode_options = [
+            ("aggressive", "Агрессивная оптимизация (максимальное объединение)"),
+            ("safe", "Безопасное объединение (сохранение структуры)")
+        ]
         
-        # Выходной файл
-        frame_output = ttk.Frame(frame_settings)
-        frame_output.pack(fill='x', padx=5, pady=5)
-        ttk.Label(frame_output, text="Выходной файл:").pack(side='left', padx=5)
-        self.entry_opt_output = ttk.Entry(frame_output)
+        for value, text in mode_options:
+            ttk.Radiobutton(frame_mode, text=text, value=value, variable=self.var_opt_mode).pack(anchor='w', padx=10, pady=2)
+        
+        # Правый фрейм: выходной файл и опции
+        frame_output_options = ttk.LabelFrame(frame_right, text="Выходные настройки")
+        frame_output_options.pack(fill='x', pady=5)
+        
+        # Флажок для автоматического сохранения результатов
+        self.var_opt_autosave = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            frame_output_options, 
+            text="Автоматически сохранять результаты", 
+            variable=self.var_opt_autosave,
+            command=self._toggle_output_settings
+        ).pack(anchor='w', padx=10, pady=2)
+        
+        # Выходной файл с путем
+        frame_output_file = ttk.Frame(frame_output_options)
+        frame_output_file.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(frame_output_file, text="Выходной файл:").pack(side='left', padx=(0, 5))
+        self.entry_opt_output = ttk.Entry(frame_output_file)
         self.entry_opt_output.pack(side='left', fill='x', expand=True, padx=5)
         self.entry_opt_output.insert(0, "optimized_cidr.txt")
         
-        btn_optimize = ttk.Button(frame_settings, text="Оптимизировать CIDR", command=self.optimize_cidr)
-        btn_optimize.pack(side='left', padx=5)
+        self.btn_output_browse = ttk.Button(frame_output_file, text="...", width=3, 
+                                            command=self._browse_output_file)
+        self.btn_output_browse.pack(side='left')
         
-        # Лог и результат
-        frame_result = ttk.LabelFrame(self.tab_cidr_optimization, text="Результат")
+        # Формат вывода
+        frame_output_format = ttk.Frame(frame_output_options)
+        frame_output_format.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(frame_output_format, text="Формат вывода:").pack(side='left', padx=(0, 5))
+        self.var_opt_format = tk.StringVar(value="cidr")
+        formats = [("CIDR", "cidr"), ("IP диапазоны", "range"), ("Список IP", "list")]
+        
+        format_combo = ttk.Combobox(frame_output_format, values=[f[0] for f in formats], 
+                                  textvariable=self.var_opt_format, state="readonly", width=15)
+        format_combo.pack(side='left', padx=5)
+        
+        # ======= НИЖНЯЯ ПАНЕЛЬ: КНОПКИ И РЕЗУЛЬТАТЫ =======
+        frame_bottom = ttk.Frame(paned)
+        paned.add(frame_bottom, weight=40)
+        
+        # Кнопки действий
+        frame_actions = ttk.Frame(frame_bottom)
+        frame_actions.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Button(
+            frame_actions, 
+            text="Оптимизировать", 
+            command=self.optimize_cidr,
+            style="Accent.TButton"  # Используем акцентный стиль если доступен
+        ).pack(side='left', padx=5)
+        
+        ttk.Button(
+            frame_actions, 
+            text="Очистить", 
+            command=self._clear_optimization_inputs
+        ).pack(side='left', padx=5)
+        
+        ttk.Button(
+            frame_actions, 
+            text="Сохранить результаты", 
+            command=self._save_optimization_results
+        ).pack(side='right', padx=5)
+        
+        ttk.Button(
+            frame_actions, 
+            text="Копировать в буфер обмена", 
+            command=self._copy_results_to_clipboard
+        ).pack(side='right', padx=5)
+        
+        # Результаты
+        frame_result = ttk.LabelFrame(frame_bottom, text="Результаты оптимизации")
         frame_result.pack(fill='both', expand=True, padx=10, pady=5)
-        scrollbar = ttk.Scrollbar(frame_result)
-        scrollbar.pack(side='right', fill='y')
-        self.text_opt_result = tk.Text(frame_result, yscrollcommand=scrollbar.set, height=10)
-        self.text_opt_result.pack(fill='both', expand=True)
-        scrollbar.config(command=self.text_opt_result.yview)
+        
+        # Добавляем информационную панель для статистики
+        self.frame_stats = ttk.Frame(frame_result)
+        self.frame_stats.pack(fill='x', padx=5, pady=5)
+        
+        stats_fields = [
+            ("Исходное количество CIDR:", "var_total_cidrs"),
+            ("После оптимизации:", "var_optimized_cidrs"),
+            ("Эффективность сжатия:", "var_compression_ratio")
+        ]
+        
+        # Создаем переменные для статистики и метки
+        row = 0
+        col = 0
+        for label_text, var_name in stats_fields:
+            ttk.Label(self.frame_stats, text=label_text).grid(row=row, column=col, sticky='w', padx=(10 if col == 0 else 30, 5))
+            setattr(self, var_name, tk.StringVar(value="-"))
+            ttk.Label(self.frame_stats, textvariable=getattr(self, var_name)).grid(row=row, column=col+1, sticky='w', padx=5)
+            
+            col += 2
+            if col >= 4:  # Переход на новую строку после 2 пар полей
+                col = 0
+                row += 1
+        
+        # Текстовое поле результатов с полосой прокрутки
+        frame_result_text = ttk.Frame(frame_result)
+        frame_result_text.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.text_opt_result = tk.Text(frame_result_text, wrap=tk.WORD)
+        scrollbar_result = ttk.Scrollbar(frame_result_text, command=self.text_opt_result.yview)
+        self.text_opt_result.configure(yscrollcommand=scrollbar_result.set)
+        
+        self.text_opt_result.pack(side='left', fill='both', expand=True)
+        scrollbar_result.pack(side='right', fill='y')
+        
+        # Добавляем контекстное меню и для поля результатов
+        self._add_text_context_menu(self.text_opt_result)
+        
+        # Статусная строка
+        self.status_var = tk.StringVar(value="Готов к работе")
+        status_bar = ttk.Label(self.tab_cidr_optimization, textvariable=self.status_var, relief=tk.SUNKEN, anchor='w')
+        status_bar.pack(side='bottom', fill='x', padx=5, pady=2)
+    
+        # Вызываем функцию для инициализации видимости элементов
+        self._toggle_input_mode()
+        self._toggle_output_settings()
+    
+    def _toggle_input_mode(self):
+        """Переключение между режимами ввода данных"""
+        source = self.var_opt_source.get()
+        
+        # Скрываем все фреймы ввода
+        for frame in [self.frame_text_input, self.frame_path_input]:
+            frame.pack_forget()
+        
+        # Показываем соответствующий фрейм
+        if source == "text":
+            self.frame_text_input.pack(fill='both', expand=True)
+        else:  # file или url
+            self.frame_path_input.pack(fill='x', pady=5)
+            
+            # Изменяем текст кнопки и подсказку в зависимости от источника
+            if source == "file":
+                self.btn_browse.configure(text="Обзор", state="normal")
+                self.entry_opt_path.configure(placeholder="Выберите файл или введите путь...")
+            else:  # url
+                self.btn_browse.configure(text="Обзор", state="disabled")
+                self.entry_opt_path.configure(placeholder="Введите URL...")
+    
+    def _toggle_output_settings(self):
+        """Включение/отключение полей настройки вывода в зависимости от автосохранения"""
+        state = "normal" if self.var_opt_autosave.get() else "disabled"
+        
+        for widget in [self.entry_opt_output, self.btn_output_browse]:
+            widget.configure(state=state)
+    
+    def _add_text_context_menu(self, text_widget):
+        """Добавление контекстного меню к текстовому полю"""
+        context_menu = tk.Menu(text_widget, tearoff=0)
+        
+        context_menu.add_command(label="Вырезать", command=lambda: self._handle_text_command(text_widget, "cut"))
+        context_menu.add_command(label="Копировать", command=lambda: self._handle_text_command(text_widget, "copy"))
+        context_menu.add_command(label="Вставить", command=lambda: self._handle_text_command(text_widget, "paste"))
+        context_menu.add_separator()
+        context_menu.add_command(label="Выделить всё", command=lambda: self._handle_text_command(text_widget, "select_all"))
+        
+        # Привязываем вызов меню к правой кнопке мыши
+        text_widget.bind("<Button-3>", lambda event: self._show_context_menu(event, context_menu))
+    
+    def _handle_text_command(self, text_widget, command):
+        """Обработка команд контекстного меню для текстовых полей"""
+        if command == "cut":
+            text_widget.event_generate("<<Cut>>")
+        elif command == "copy":
+            text_widget.event_generate("<<Copy>>")
+        elif command == "paste":
+            text_widget.event_generate("<<Paste>>")
+        elif command == "select_all":
+            text_widget.tag_add(tk.SEL, "1.0", tk.END)
+            text_widget.mark_set(tk.INSERT, "1.0")
+            text_widget.see(tk.INSERT)
+    
+    def _show_context_menu(self, event, menu):
+        """Показать контекстное меню в позиции курсора"""
+        menu.tk_popup(event.x_root, event.y_root)
+    
+    def _preview_source(self):
+        """Предпросмотр содержимого файла или URL"""
+        source = self.var_opt_source.get()
+        path = self.entry_opt_path.get().strip()
+        
+        if not path:
+            messagebox.showwarning("Предупреждение", "Пожалуйста, укажите путь к файлу или URL")
+            return
+        
+        try:
+            content = ""
+            if source == "file":
+                with open(path, 'r', errors='ignore') as f:
+                    content = f.read()
+            elif source == "url":
+                # Используем метод из IPCIDRProcessor для загрузки файла
+                content = self.processor.download_file(path)
+                
+            if content:
+                # Создаем окно предпросмотра
+                preview_window = tk.Toplevel(self)
+                preview_window.title(f"Предпросмотр: {path}")
+                preview_window.geometry("600x400")
+                
+                preview_text = tk.Text(preview_window, wrap=tk.WORD)
+                scrollbar = ttk.Scrollbar(preview_window, command=preview_text.yview)
+                preview_text.configure(yscrollcommand=scrollbar.set)
+                
+                preview_text.pack(side='left', fill='both', expand=True)
+                scrollbar.pack(side='right', fill='y')
+                
+                preview_text.insert(tk.END, content)
+                preview_text.configure(state='disabled')  # Только для чтения
+            else:
+                messagebox.showinfo("Информация", "Файл пуст или не содержит данных")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {str(e)}")
+    
+    def _browse_output_file(self):
+        """Выбор пути для сохранения результатов"""
+        file_path = filedialog.asksaveasfilename(
+            title="Сохранить результаты как",
+            filetypes=[("Текстовые файлы", "*.txt"), ("Все файлы", "*.*")],
+            defaultextension=".txt"
+        )
+        if file_path:
+            self.entry_opt_output.delete(0, tk.END)
+            self.entry_opt_output.insert(0, file_path)
+    
+    def _clear_optimization_inputs(self):
+        """Очистка полей ввода"""
+        self.text_opt_input.delete("1.0", tk.END)
+        self.entry_opt_path.delete(0, tk.END)
+        self.text_opt_result.delete("1.0", tk.END)
+        
+        # Сброс статистики
+        for var_name in ["var_total_cidrs", "var_optimized_cidrs", "var_compression_ratio"]:
+            getattr(self, var_name).set("-")
+        
+        self.status_var.set("Поля очищены")
+    
+    def _save_optimization_results(self):
+        """Сохранение результатов в файл"""
+        results = self.text_opt_result.get("1.0", tk.END).strip()
+        if not results:
+            messagebox.showinfo("Информация", "Нет данных для сохранения")
+            return
+            
+        output_file = self.entry_opt_output.get().strip()
+        if not output_file:
+            output_file = filedialog.asksaveasfilename(
+                title="Сохранить результаты как",
+                filetypes=[("Текстовые файлы", "*.txt"), ("Все файлы", "*.*")],
+                defaultextension=".txt"
+            )
+            if not output_file:
+                return
+        
+        try:
+            with open(output_file, 'w') as f:
+                f.write(results)
+            messagebox.showinfo("Успех", f"Результаты сохранены в {output_file}")
+            self.status_var.set(f"Сохранено в {output_file}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить файл: {str(e)}")
+    
+    def _copy_results_to_clipboard(self):
+        """Копирование результатов в буфер обмена"""
+        results = self.text_opt_result.get("1.0", tk.END).strip()
+        if not results:
+            messagebox.showinfo("Информация", "Нет данных для копирования")
+            return
+            
+        self.tab_cidr_optimization.clipboard_clear()
+        self.tab_cidr_optimization.clipboard_append(results)
+        self.status_var.set("Результаты скопированы в буфер обмена")
 
     # Методы для существующей функциональности
     def update_separator_order(self, key):
@@ -1699,12 +2153,79 @@ class GUI:
             messagebox.showerror("Ошибка", "Не удалось установить маску по умолчанию")
 
     def add_local_files(self):
-        files = filedialog.askopenfilenames(title="Выберите файлы")
-        if files:
-            for file in files:
-                if file not in self.selected_files:
-                    self.selected_files.append(file)
-                    self.listbox_files.insert(tk.END, file)
+        """Добавление нескольких файлов с проверкой существования и доступности"""
+        files = filedialog.askopenfilenames(
+            title="Выберите файлы",
+            filetypes=(("Текстовые файлы", "*.txt"),
+                       ("CSV файлы", "*.csv"),
+                       ("Все файлы", "*.*"))
+        )
+        
+        if not files:
+            return
+            
+        added_count = 0
+        for file_path in files:
+            try:
+                # Проверка существования файла
+                if not os.path.exists(file_path):
+                    messagebox.showwarning("Предупреждение", f"Файл не существует: {file_path}")
+                    continue
+                    
+                # Проверка доступа к файлу
+                with open(file_path, 'r', errors='ignore') as f:
+                    # Проверка первых 10 байт для убеждения, что файл читается
+                    f.read(10)
+                
+                # Добавление файла в список, если он еще не добавлен
+                if file_path not in self.selected_files:
+                    self.selected_files.append(file_path)
+                    self.listbox_files.insert(tk.END, os.path.basename(file_path))
+                    # Сохраняем также полный путь в словаре для быстрого доступа
+                    self.file_paths[os.path.basename(file_path)] = file_path
+                    added_count += 1
+                else:
+                    print(f"Файл уже в списке: {file_path}")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось добавить файл {file_path}: {str(e)}")
+        
+        if added_count > 0:
+            self.status_bar.config(text=f"Добавлено файлов: {added_count}")
+
+    def add_urls(self):
+        """Добавление URL с базовой валидацией"""
+        url = simpledialog.askstring("Добавить URL", "Введите URL файла:")
+        
+        if not url:
+            return
+            
+        # Базовая валидация URL
+        url = url.strip()
+        if not (url.startswith('http://') or url.startswith('https://')):
+            url = 'https://' + url
+        
+        try:
+            # Проверка формата URL
+            parsed_url = urlparse(url)
+            if not all([parsed_url.scheme, parsed_url.netloc]):
+                messagebox.showwarning("Предупреждение", "Некорректный формат URL")
+                return
+                
+            # Проверка на дубликаты
+            if url in self.selected_urls:
+                messagebox.showinfo("Информация", "Этот URL уже добавлен в список")
+                return
+                
+            # Опциональная проверка доступности URL
+            # Это может замедлить интерфейс, поэтому можно сделать это в отдельном потоке
+            # или оставить проверку на момент обработки
+            
+            # Добавление URL в список
+            self.selected_urls.append(url)
+            self.listbox_urls.insert(tk.END, url)
+            self.status_bar.config(text=f"Добавлен URL: {url}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось обработать URL: {str(e)}")
 
     def clear_local_files(self):
         self.selected_files = []
@@ -2258,18 +2779,6 @@ class GUI:
 
     def start(self):
         self.root.mainloop()
-
-# Остальная часть кода (main и другие функции) остается без изменений
-    
-    # Методы для вкладки локальных файлов
-    def add_local_files(self):
-        """Добавление локальных файлов"""
-        files = filedialog.askopenfilenames(title="Выберите файлы")
-        if files:
-            for file in files:
-                if file not in self.selected_files:
-                    self.selected_files.append(file)
-                    self.listbox_files.insert(tk.END, file)
     
     def clear_local_files(self):
         """Очистка списка локальных файлов"""
