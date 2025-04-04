@@ -53,11 +53,55 @@ class IPCIDRProcessor:
                 r'[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|'
                 r':((:[0-9a-fA-F]{1,4}){1,7}|:))\b'
             )
-            self.range_mask = "{start}-{end}"  # Маска по умолчанию для диапазонов
-            self.custom_range_pattern = None   # Пользовательский шаблон для диапазонов
-            self.config_file = 'ip_cidr_config.yaml'
-            self.output_folder = 'output'
-            self.default_config = {
+class IPCIDRProcessor:
+    def __init__(self):
+        """Инициализация класса с регулярными выражениями и настройками."""
+        # Регулярное выражение для IPv4 CIDR
+        self.ip_pattern_v4 = re.compile(
+            r'\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'
+            r'/(3[0-2]|[12]?[0-9])\b'
+        )
+        # Регулярное выражение для IPv6 CIDR
+        self.ip_pattern_v6 = re.compile(
+            r'\b(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,7}:|'
+            r'([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|'
+            r'([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|'
+            r'([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|'
+            r'[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|'
+            r':((:[0-9a-fA-F]{1,4}){1,7}|:))'
+            r'/(12[0-8]|1[01][0-9]|[1-9][0-9]|[0-9])\b'
+        )
+        # Регулярное выражение для одиночных IPv4
+        self.ip_single_v4 = re.compile(
+            r'\b(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.'
+            r'(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
+        )
+        # Регулярное выражение для одиночных IPv6
+        self.ip_single_v6 = re.compile(
+            r'\b(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,7}:|'
+            r'([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|'
+            r'([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|'
+            r'([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|'
+            r'([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|'
+            r'[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|'
+            r':((:[0-9a-fA-F]{1,4}){1,7}|:))\b'
+        )
+        self.range_mask = "{start}-{end}"
+        self.custom_range_pattern = None
+        self.config_file = 'ip_cidr_config.yaml'
+        self.output_folder = 'output'
+        # Конфигурация по умолчанию
+        self.default_config = {
             'masks': [
                 {'name': 'default', 'prefix': '', 'suffix': '', 'separator': '\n'},
                 {'name': 'clash', 'prefix': 'IP-CIDR,', 'suffix': ',no-resolve', 'separator': '\n'},
@@ -66,80 +110,20 @@ class IPCIDRProcessor:
                 {'name': 'surge', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n'},
                 {'name': 'shadowsocks', 'prefix': '', 'suffix': '@shadowsocks', 'separator': ' | '},
                 {'name': 'json', 'prefix': '{"ip": "', 'suffix': '"}', 'separator': ',\n'},
-                # Новые варианты масок
                 {'name': 'csv', 'prefix': '"', 'suffix': '"', 'separator': ','},
                 {'name': 'yaml', 'prefix': '- ', 'suffix': '', 'separator': '\n'},
                 {'name': 'complex', 'prefix': 'entry: {ip} -> ', 'suffix': ' [active]', 'separator': ';\n'}
             ],
             'default_mask': 'default'
-            }
-            self.config = self.load_config()
-            
-            if not os.path.exists(self.output_folder):
-                os.makedirs(self.output_folder)
-
-    def cidr_to_range(self, cidr):
-        """Преобразование CIDR в диапазон IP-адресов"""
-        network = ipaddress.ip_network(cidr, strict=False)
-        first_ip = network.network_address
-        last_ip = network.broadcast_address
-        return (str(first_ip), str(last_ip))
-
-    def format_range(self, start_ip, end_ip, use_custom=False):
-        """Форматирование диапазона с учетом маски"""
-        if use_custom and self.custom_range_pattern:
-            return self.custom_range_pattern.format(start=start_ip, end=end_ip)
-        return self.range_mask.format(start=start_ip, end=end_ip)
-
-    def set_range_mask(self, mask):
-        """Установка маски для диапазонов"""
-        if "{start}" in mask and "{end}" in mask:
-            self.range_mask = mask
-            return True
-        return False
-
-    def set_custom_range_pattern(self, pattern):
-        """Установка пользовательского шаблона для диапазонов"""
-        if "{start}" in pattern and "{end}" in pattern:
-            self.custom_range_pattern = pattern
-            return True
-        return False
-
-    def process_file_to_range(self, file_path, include_ipv4=True, include_ipv6=True, use_custom_range=False):
-        """Обработка файла с выводом в виде диапазонов"""
-        ips_dict = self.process_file(file_path)
-        ranges = []
+        }
+        self.config = self.load_config()
         
-        if include_ipv4:
-            for cidr in ips_dict['ipv4']:
-                start, end = self.cidr_to_range(cidr)
-                ranges.append(self.format_range(start, end, use_custom_range))
-        
-        if include_ipv6:
-            for cidr in ips_dict['ipv6']:
-                start, end = self.cidr_to_range(cidr)
-                ranges.append(self.format_range(start, end, use_custom_range))
-        
-        return ranges
-
-    def save_results_as_ranges(self, file_path, output_file, include_ipv4=True, include_ipv6=True, use_custom_range=False):
-        """Сохранение результатов в виде диапазонов"""
-        ranges = self.process_file_to_range(file_path, include_ipv4, include_ipv6, use_custom_range)
-        if not ranges:
-            print("Нет диапазонов для сохранения")
-            return False
-        
-        try:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(ranges))
-            print(f"Диапазоны сохранены в файл: {output_file}")
-            return True
-        except Exception as e:
-            print(f"Ошибка при сохранении диапазонов: {e}")
-            return False
+        # Создание папки output, если она не существует
+        if not os.path.exists(self.output_folder):
+            os.makedirs(self.output_folder)
 
     def load_config(self):
-        """Загрузка конфигурации из файла или создание конфигурации по умолчанию"""
+        """Загрузка конфигурации из файла или возврат конфигурации по умолчанию."""
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
@@ -149,12 +133,11 @@ class IPCIDRProcessor:
                 print(f"Ошибка при загрузке конфигурации: {e}")
                 return self.default_config
         else:
-            # Создаем файл конфигурации по умолчанию
             self.save_config(self.default_config)
             return self.default_config
 
     def save_config(self, config):
-        """Сохранение конфигурации в файл"""
+        """Сохранение конфигурации в файл."""
         try:
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
@@ -164,54 +147,62 @@ class IPCIDRProcessor:
             return False
 
     def validate_ip_cidr(self, ip_cidr):
-        """Validate if a string is a valid IP CIDR notation"""
+        """Проверка валидности IP или CIDR."""
         try:
             ipaddress.ip_network(ip_cidr, strict=False)
             return True
         except ValueError:
             return False
-    
+
     def extract_ips(self, text):
-        """Извлечение CIDR из текста с учетом IPv4 и IPv6"""
-        # Находим все CIDR IPv4 и IPv6 в тексте
+        """Извлечение IP-адресов и CIDR из текста с фильтрацией некорректных записей."""
         cidrs = []
         
-        # Поиск IPv4 CIDR
+        # Извлечение IPv4 CIDR
         for match in self.ip_pattern_v4.finditer(text):
-            cidrs.append(match.group(0))
-            
-        # Поиск IPv6 CIDR
+            cidr = match.group(0)
+            if self.validate_ip_cidr(cidr):
+                cidrs.append(cidr)
+            else:
+                print(f"Некорректный CIDR: {cidr}")
+        
+        # Извлечение IPv6 CIDR
         for match in self.ip_pattern_v6.finditer(text):
-            cidrs.append(match.group(0))
-            
-        # Поиск одиночных IPv4 и добавление их как /32
+            cidr = match.group(0)
+            if self.validate_ip_cidr(cidr):
+                cidrs.append(cidr)
+            else:
+                print(f"Некорректный CIDR: {cidr}")
+        
+        # Извлечение одиночных IPv4
         for match in self.ip_single_v4.finditer(text):
             ip = match.group(0)
-            # Проверяем, что этот IP еще не был найден как часть CIDR
-            if not any(ip == cidr.split('/')[0] for cidr in cidrs):
-                cidrs.append(f"{ip}/32")
-                
-        # Поиск одиночных IPv6 и добавление их как /128
+            cidr = f"{ip}/32"
+            if self.validate_ip_cidr(cidr):
+                if not any(ip == c.split('/')[0] for c in cidrs):
+                    cidrs.append(cidr)
+            else:
+                print(f"Некорректный IP: {ip}")
+        
+        # Извлечение одиночных IPv6
         for match in self.ip_single_v6.finditer(text):
             ip = match.group(0)
-            # Проверяем, что этот IP еще не был найден как часть CIDR
-            if not any(ip == cidr.split('/')[0] for cidr in cidrs):
-                cidrs.append(f"{ip}/128")
+            cidr = f"{ip}/128"
+            if self.validate_ip_cidr(cidr):
+                if not any(ip == c.split('/')[0] for c in cidrs):
+                    cidrs.append(cidr)
+            else:
+                print(f"Некорректный IP: {ip}")
         
-        # Удаляем дубликаты и возвращаем результат
         return list(set(cidrs))
 
     def process_file(self, file_path):
-        """Process file and extract IP addresses"""
+        """Обработка файла с IP-адресами."""
         try:
             if not os.path.exists(file_path):
                 print(f"Файл не найден: {file_path}")
                 return {'ipv4': [], 'ipv6': []}
-                
-            if os.path.getsize(file_path) == 0:
-                print(f"Файл пустой: {file_path}")
-                return {'ipv4': [], 'ipv6': []}
-    
+            
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read().strip()
                 if not content:
@@ -225,7 +216,6 @@ class IPCIDRProcessor:
                 
                 sorted_ips = self.sort_ip_addresses(ips)
                 
-                # Разделяем на IPv4 и IPv6
                 ipv4_list = [ip for ip in sorted_ips if ipaddress.ip_network(ip, strict=False).version == 4]
                 ipv6_list = [ip for ip in sorted_ips if ipaddress.ip_network(ip, strict=False).version == 6]
                 
@@ -233,14 +223,9 @@ class IPCIDRProcessor:
         except Exception as e:
             print(f"Ошибка при обработке файла {file_path}: {e}")
             return {'ipv4': [], 'ipv6': []}
-    
+
     def save_results_with_options(self, ips_dict, output_file, mask_name=None, include_ipv4=True, include_ipv6=True):
-        """Сохранение результатов с выбором IPv4/IPv6 и опциональной маской"""
-        if not (ips_dict['ipv4'] or ips_dict['ipv6']):
-            print("Нет IP-адресов для сохранения")
-            return False
-        
-        # Фильтруем по выбору IPv4/IPv6
+        """Сохранение результатов с учетом опций IPv4/IPv6 и маски."""
         ips_to_save = []
         if include_ipv4:
             ips_to_save.extend(ips_dict['ipv4'])
@@ -266,8 +251,7 @@ class IPCIDRProcessor:
             return False
 
     def sort_ip_addresses(self, ip_list):
-        """Sort IP addresses for consistent output"""
-        # Separate IPv4 and IPv6 addresses
+        """Сортировка IP-адресов по версии и значению."""
         ipv4_list = []
         ipv6_list = []
         
@@ -279,39 +263,31 @@ class IPCIDRProcessor:
                 else:
                     ipv6_list.append(ip_cidr)
             except ValueError:
-                # Skip invalid IP addresses
                 continue
         
-        # Sort each list
         sorted_ipv4 = sorted(ipv4_list, key=lambda ip: ipaddress.IPv4Network(ip, strict=False))
         sorted_ipv6 = sorted(ipv6_list, key=lambda ip: ipaddress.IPv6Network(ip, strict=False))
         
-        # Return combined list with IPv4 addresses first, then IPv6
         return sorted_ipv4 + sorted_ipv6
-    
+
     def optimize_ip_ranges(self, ip_list):
-        """Consolidate overlapping CIDR ranges where possible"""
+        """Оптимизация списка IP-диапазонов."""
         if not ip_list:
             return []
         
-        # Используем многоэтапную оптимизацию
-        optimized = self.multi_stage_optimization(ip_list)
+        optimized = self._consolidate_networks(ip_list)
         return optimized
-    
+
     def _consolidate_networks(self, networks):
-        """Оптимизация сетей с использованием встроенных методов ipaddress"""
+        """Объединение пересекающихся сетей."""
         if not networks:
             return []
-            
+        
         try:
-            # Преобразуем в объекты ip_network, если это еще не сделано
             ip_networks = []
             for n in networks:
                 try:
-                    if isinstance(n, str):
-                        net = ipaddress.ip_network(n.strip(), strict=False)
-                    else:
-                        net = n  # Предполагаем, что это уже объект ip_network
+                    net = ipaddress.ip_network(n.strip(), strict=False)
                     ip_networks.append(net)
                 except ValueError as e:
                     print(f"Пропуск некорректной сети {n}: {e}")
@@ -320,20 +296,14 @@ class IPCIDRProcessor:
             if not ip_networks:
                 return []
                 
-            # Сортировка и объединение
-            sorted_nets = sorted(
-                ip_networks,
-                key=lambda x: (x.version, x.network_address)
-            )
-            
-            # Возвращаем список строк
+            sorted_nets = sorted(ip_networks, key=lambda x: (x.version, x.network_address))
             return [str(net) for net in ipaddress.collapse_addresses(sorted_nets)]
         except Exception as e:
             print(f"Ошибка при объединении сетей: {e}")
             return [str(n) for n in networks if isinstance(n, ipaddress.IPv4Network) or isinstance(n, ipaddress.IPv6Network)]
-        
+
     def download_file(self, url):
-        """Загрузка файла по URL"""
+        """Загрузка файла по URL."""
         try:
             response = requests.get(url, timeout=30)
             response.raise_for_status()
@@ -342,67 +312,12 @@ class IPCIDRProcessor:
             print(f"Ошибка при загрузке файла по URL {url}: {e}")
             return ""
 
-    def multi_stage_optimization(self, cidr_list):
-        """Многоэтапная оптимизация CIDR"""
-        if not cidr_list:
-            return []
-            
-        try:
-            # Этап 1: Первичная очистка списка
-            clean_list = []
-            for cidr in cidr_list:
-                cidr = cidr.strip()
-                if cidr:
-                    try:
-                        # Проверка корректности CIDR
-                        _ = ipaddress.ip_network(cidr, strict=False)
-                        clean_list.append(cidr)
-                    except ValueError:
-                        # Пропускаем некорректные CIDR
-                        print(f"Пропуск некорректного CIDR: {cidr}")
-                        continue
-            
-            if not clean_list:
-                return []
-                
-            # Этап 2: Объединение подсетей
-            optimized = self._consolidate_networks(clean_list)
-            
-            # Этап 3: Дополнительная проверка на включение
-            final_nets = []
-            for net_str in optimized:
-                net_obj = ipaddress.ip_network(net_str, strict=False)
-                is_subnet = False
-                new_final_nets = []
-                
-                for fn in final_nets:
-                    fn_obj = ipaddress.ip_network(fn, strict=False)
-                    # Если текущая сеть является подсетью существующей, пропускаем её
-                    if net_obj.subnet_of(fn_obj):
-                        is_subnet = True
-                        break
-                    # Если существующая сеть является подсетью текущей, заменяем её
-                    elif fn_obj.subnet_of(net_obj):
-                        continue
-                    new_final_nets.append(fn)
-                
-                if not is_subnet:
-                    new_final_nets.append(str(net_obj))
-                final_nets = new_final_nets
-            
-            # Этап 4: Сортировка и повторное объединение
-            return self._consolidate_networks(final_nets)
-        except Exception as e:
-            print(f"Ошибка при многоэтапной оптимизации: {e}")
-            return cidr_list  # В случае ошибки возвращаем исходный список
-
     def apply_mask(self, ips, mask_name):
-        """Применение маски к IP-адресам с поддержкой сложных шаблонов"""
+        """Применение маски к списку IP-адресов."""
         mask = next((m for m in self.config['masks'] if m['name'] == mask_name), None)
         if not mask:
             mask = next((m for m in self.config['masks'] if m['name'] == self.config['default_mask']), self.config['masks'][0])
         
-        # Поддержка сложных шаблонов с использованием {ip}
         if '{ip}' in mask['prefix'] or '{ip}' in mask['suffix']:
             formatted_ips = [f"{mask['prefix'].replace('{ip}', ip)}{ip}{mask['suffix'].replace('{ip}', ip)}" for ip in ips]
         else:
@@ -410,33 +325,13 @@ class IPCIDRProcessor:
         
         return mask['separator'].join(formatted_ips)
 
-    def save_results(self, ips, output_file, mask_name=None):
-        """Сохранение результатов в файл с применением маски"""
-        if not ips:
-            print("Нет IP-адресов для сохранения")
-            return False
-        
-        if mask_name:
-            content = self.apply_mask(ips, mask_name)
-        else:
-            content = '\n'.join(ips)
-        
-        try:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(content)
-            print(f"Результаты сохранены в файл: {output_file}")
-            return True
-        except Exception as e:
-            print(f"Ошибка при сохранении результатов: {e}")
-            return False
-
     def add_mask(self, name, prefix, suffix, separator):
-        """Добавление новой маски с поддержкой комбинированных разделителей"""
+        """Добавление новой маски в конфигурацию."""
         new_mask = {
             'name': name,
             'prefix': prefix,
             'suffix': suffix,
-            'separator': separator  # Теперь separator может быть комбинацией, например ",\n"
+            'separator': separator
         }
         
         for i, mask in enumerate(self.config['masks']):
@@ -449,47 +344,38 @@ class IPCIDRProcessor:
         return self.save_config(self.config)
 
     def get_masks(self):
-        """Получение списка доступных масок"""
+        """Получение списка имен масок."""
         return [mask['name'] for mask in self.config['masks']]
 
     def set_default_mask(self, mask_name):
-        """Установка маски по умолчанию"""
+        """Установка маски по умолчанию."""
         if mask_name in self.get_masks():
             self.config['default_mask'] = mask_name
             return self.save_config(self.config)
         return False
 
     def merge_files(self, file_paths, output_file, mask_name=None):
-        """Объединение нескольких файлов в один с обработкой исключений"""
+        """Объединение IP-адресов из нескольких файлов."""
         all_ips = []
-        try:
-            for file_path in file_paths:
-                try:
-                    ips_dict = self.process_file(file_path)
-                    all_ips.extend(ips_dict['ipv4'] + ips_dict['ipv6'])
-                except Exception as e:
-                    print(f"Ошибка при обработке файла {file_path}: {e}")
-                    continue
-            
-            if not all_ips:
-                print("Нет IP-адресов для объединения")
-                return False
-            
-            # Удаляем дубликаты
-            all_ips = list(set(all_ips))
-            
-            return self.save_results(all_ips, output_file, mask_name)
-        except Exception as e:
-            print(f"Критическая ошибка при объединении файлов: {e}")
+        for file_path in file_paths:
+            ips_dict = self.process_file(file_path)
+            all_ips.extend(ips_dict['ipv4'] + ips_dict['ipv6'])
+        
+        if not all_ips:
+            print("Нет IP-адресов для объединения")
             return False
+        
+        all_ips = list(set(all_ips))
+        return self.save_results_with_options({'ipv4': [ip for ip in all_ips if ':' not in ip], 
+                                              'ipv6': [ip for ip in all_ips if ':' in ip]}, 
+                                             output_file, mask_name)
 
     def expand_cidr(self, cidr, output_file=None):
-        """Разложение CIDR с потоковой записью в файл или возвратом ограниченного списка"""
+        """Разложение CIDR на отдельные IP-адреса."""
         try:
             network = ipaddress.ip_network(cidr, strict=False)
             num_addresses = network.num_addresses
             
-            # Ограничение: если CIDR слишком большой (> 65536 адресов), требуем файл
             if num_addresses > 65536 and not output_file:
                 print(f"Слишком много адресов в {cidr} ({num_addresses}). Укажите файл для записи.")
                 return []
@@ -503,42 +389,20 @@ class IPCIDRProcessor:
                             f.write(f"{ip}\n")
                 return [f"Сохранено в {output_file}"]
             else:
-                # Для небольших CIDR возвращаем список
                 return [str(ip) for ip in network.hosts()] or [str(network.network_address)]
         except ValueError as e:
             print(f"Ошибка при разложении CIDR {cidr}: {e}")
             return []
 
-    def expand_range(self, ip_range):
-        """Разложение диапазона IP-адресов (например, 192.168.1.1-192.168.1.10)"""
-        try:
-            start_ip, end_ip = ip_range.split('-')
-            start = ipaddress.ip_address(start_ip.strip())
-            end = ipaddress.ip_address(end_ip.strip())
-            if start.version != end.version:
-                raise ValueError("Версии IP не совпадают")
-            ip_list = []
-            current = start
-            while current <= end:
-                ip_list.append(str(current))
-                current = ipaddress.ip_address(int(current) + 1)
-            return ip_list
-        except ValueError as e:
-            print(f"Ошибка при разложении диапазона {ip_range}: {e}")
-            return []
-
     def process_input_to_ips(self, input_text, output_file=None):
-        """Обработка текста с CIDR или диапазонами с потоковой записью"""
+        """Обработка текста для получения списка IP-адресов."""
         cidrs = self.extract_ips(input_text)
-        ranges = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}-(?:\d{1,3}\.){3}\d{1,3}\b', input_text)
-        
         all_ips = []
         saved = False
         
         if output_file and os.path.exists(output_file):
-            os.remove(output_file)  # Очищаем файл перед записью
+            os.remove(output_file)
         
-        # Обработка CIDR
         for cidr in cidrs:
             ips = self.expand_cidr(cidr, output_file)
             if output_file and ips and ips[0].startswith("Сохранено"):
@@ -546,40 +410,25 @@ class IPCIDRProcessor:
             else:
                 all_ips.extend(ips)
         
-        # Обработка диапазонов
-        for ip_range in ranges:
-            range_ips = self.expand_range(ip_range)
-            if output_file:
-                with open(output_file, 'a', encoding='utf-8') as f:
-                    for ip in range_ips:
-                        f.write(f"{ip}\n")
-                saved = True
-            else:
-                all_ips.extend(range_ips)
-        
-        all_ips = sorted(list(set(all_ips)), key=ipaddress.ip_address) if not output_file else all_ips
-        
         if output_file and saved:
             print(f"Все IP-адреса сохранены в файл: {output_file}")
             return all_ips, True
         return all_ips, False
 
     def count_ips_in_cidr(self, cidr):
-        """Подсчет количества IP-адресов в CIDR"""
+        """Подсчет количества IP-адресов в CIDR."""
         try:
             network = ipaddress.ip_network(cidr, strict=False)
-            # Для IPv4 возвращаем число адресов
             return network.num_addresses
         except ValueError as e:
             print(f"Ошибка при подсчете IP в CIDR {cidr}: {e}")
             raise
-    
+
     def check_cidr_overlap(self, cidr1, cidr2):
-        """Проверка пересечения двух CIDR"""
+        """Проверка пересечения двух CIDR."""
         try:
             net1 = ipaddress.ip_network(cidr1, strict=False)
             net2 = ipaddress.ip_network(cidr2, strict=False)
-            # Проверка пересечения - используем встроенный метод overlaps
             return net1.overlaps(net2)
         except ValueError as e:
             print(f"Ошибка при проверке пересечения CIDR {cidr1} и {cidr2}: {e}")
