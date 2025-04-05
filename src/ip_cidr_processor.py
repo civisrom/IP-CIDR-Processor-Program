@@ -581,7 +581,26 @@ class IPCIDRProcessorGUI:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Add the existing masks to the frame
+        # Default mask frame (moved up to initialize self.default_mask_combo earlier)
+        default_mask_frame = ttk.LabelFrame(self.tab_masks, text="Default Mask")
+        default_mask_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(default_mask_frame, text="Select Default Mask:").pack(side='left', padx=5, pady=5)
+        self.default_mask_var = tk.StringVar()
+        self.default_mask_combo = ttk.Combobox(default_mask_frame, textvariable=self.default_mask_var)
+        self.default_mask_combo['values'] = self.processor.get_mask_names()
+        # Set current default
+        current_default = next((i for i, name in enumerate(self.processor.get_mask_names()) 
+                                if name == self.processor.config['default_mask']), 0)
+        self.default_mask_combo.current(current_default)
+        self.default_mask_combo.pack(side='left', padx=5, pady=5)
+        
+        # Set default button
+        btn_set_default = ttk.Button(default_mask_frame, text="Set as Default", 
+                                    command=self.set_default_mask)
+        btn_set_default.pack(side='left', padx=5, pady=5)
+        
+        # Add the existing masks to the frame (after default_mask_combo is initialized)
         self.mask_entries = {}
         self.update_mask_display(scrollable_frame)
         
@@ -615,25 +634,6 @@ class IPCIDRProcessorGUI:
         # Add mask button
         btn_add_mask = ttk.Button(new_mask_frame, text="Add Mask", command=self.add_new_mask)
         btn_add_mask.grid(row=5, column=0, columnspan=2, padx=5, pady=5)
-        
-        # Default mask frame
-        default_mask_frame = ttk.LabelFrame(self.tab_masks, text="Default Mask")
-        default_mask_frame.pack(fill='x', padx=10, pady=5)
-        
-        ttk.Label(default_mask_frame, text="Select Default Mask:").pack(side='left', padx=5, pady=5)
-        self.default_mask_var = tk.StringVar()
-        self.default_mask_combo = ttk.Combobox(default_mask_frame, textvariable=self.default_mask_var)
-        self.default_mask_combo['values'] = self.processor.get_mask_names()
-        # Set current default
-        current_default = next((i for i, name in enumerate(self.processor.get_mask_names()) 
-                              if name == self.processor.config['default_mask']), 0)
-        self.default_mask_combo.current(current_default)
-        self.default_mask_combo.pack(side='left', padx=5, pady=5)
-        
-        # Set default button
-        btn_set_default = ttk.Button(default_mask_frame, text="Set as Default", 
-                                    command=self.set_default_mask)
-        btn_set_default.pack(side='left', padx=5, pady=5)
         
         # Refresh button
         btn_refresh = ttk.Button(self.tab_masks, text="Refresh Masks", command=self.refresh_masks)
@@ -689,16 +689,19 @@ class IPCIDRProcessorGUI:
         self.process_mask_combo['values'] = mask_names
         self.optimize_mask_combo['values'] = mask_names
         self.url_mask_combo['values'] = mask_names
-        self.default_mask_combo['values'] = mask_names
+        
+        # Only update default_mask_combo if it exists
+        if hasattr(self, 'default_mask_combo'):
+            self.default_mask_combo['values'] = mask_names
         
         # Make sure all comboboxes have a valid selection
-        if not self.process_mask_var.get() in mask_names:
+        if self.process_mask_var.get() not in mask_names:
             self.process_mask_combo.current(0)
-        if not self.optimize_mask_var.get() in mask_names:
+        if self.optimize_mask_var.get() not in mask_names:
             self.optimize_mask_combo.current(0)
-        if not self.url_mask_var.get() in mask_names:
+        if self.url_mask_var.get() not in mask_names:
             self.url_mask_combo.current(0)
-        if not self.default_mask_var.get() in mask_names:
+        if hasattr(self, 'default_mask_combo') and self.default_mask_var.get() not in mask_names:
             self.default_mask_combo.current(0)
 
     # File Processing Tab Methods
