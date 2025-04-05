@@ -2,6 +2,7 @@
 import sys
 import os
 from os.path import join, abspath
+import platform
 
 block_cipher = None
 
@@ -9,7 +10,6 @@ block_cipher = None
 root_dir = os.getcwd()
 
 # Обнаружение OS для правильного именования
-import platform
 os_name = 'windows-latest' if platform.system() == 'Windows' else 'ubuntu-latest'
 
 # Определение имени исполняемого файла на основе ОС
@@ -35,7 +35,7 @@ a = Analysis(
 )
 
 pyz = PYZ(
-    a.pure, 
+    a.pure,
     a.zipped_data,
     cipher=block_cipher
 )
@@ -54,10 +54,13 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
+    windowed=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    onefile=True,
+    icon='resources/icon.ico'
 )
