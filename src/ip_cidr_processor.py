@@ -7,6 +7,7 @@ import yaml
 import requests
 from typing import List, Dict, Set, Union, Tuple, Optional
 
+
 class IPCIDRProcessor:
     def __init__(self):
         """Initialize the IP CIDR processor with configuration settings."""
@@ -348,8 +349,6 @@ class IPCIDRProcessorGUI:
         self.notebook.add(self.tab_optimize, text="Optimize CIDR")
         self.notebook.add(self.tab_url, text="URL Processing")
         self.notebook.add(self.tab_masks, text="Mask Settings")
-        self.tab_xtables = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_xtables, text="Xtables Rules")
         
         # Set up tabs
         self.setup_process_tab()
@@ -357,7 +356,6 @@ class IPCIDRProcessorGUI:
         self.setup_optimize_tab()
         self.setup_url_tab()
         self.setup_masks_tab()
-        self.setup_xtables_tab()
         
         # Start the main loop
         self.root.mainloop()
@@ -707,29 +705,21 @@ class IPCIDRProcessorGUI:
             self.default_mask_combo.current(0)
 
     # File Processing Tab Methods
-    def add_local_files(self, optimize=False, xtables=False):
+    def add_local_files(self, optimize=False):
+        """Add local files to the appropriate listbox."""
         files = filedialog.askopenfilenames(
             title="Select Files",
             filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")]
         )
-        if optimize:
-            listbox = self.listbox_files_optimize
-        elif xtables:
-            listbox = self.listbox_files_xtables
-        else:
-            listbox = self.listbox_files
+        listbox = self.listbox_files_optimize if optimize else self.listbox_files
         
         for file in files:
             if file not in listbox.get(0, tk.END):
                 listbox.insert(tk.END, file)
-    
-    def clear_local_files(self, optimize=False, xtables=False):
-        if optimize:
-            listbox = self.listbox_files_optimize
-        elif xtables:
-            listbox = self.listbox_files_xtables
-        else:
-            listbox = self.listbox_files
+
+    def clear_local_files(self, optimize=False):
+        """Clear the files listbox."""
+        listbox = self.listbox_files_optimize if optimize else self.listbox_files
         listbox.delete(0, tk.END)
 
     def process_local_files(self):
@@ -1163,165 +1153,6 @@ class IPCIDRProcessorGUI:
             messagebox.showinfo("Success", f"Default mask set to '{name}'.")
         else:
             messagebox.showerror("Error", f"Failed to set default mask to '{name}'.")
-
-    def setup_xtables_tab(self):
-        # Files frame
-        frame_files = ttk.LabelFrame(self.tab_xtables, text="Select Files with CIDR Notations")
-        frame_files.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        # File list with scrollbar
-        self.listbox_files_xtables = tk.Listbox(frame_files)
-        self.listbox_files_xtables.pack(side='left', fill='both', expand=True)
-        
-        scrollbar = ttk.Scrollbar(frame_files, orient="vertical", command=self.listbox_files_xtables.yview)
-        scrollbar.pack(side='right', fill='y')
-        self.listbox_files_xtables.config(yscrollcommand=scrollbar.set)
-        
-        # Button frame
-        btn_frame = ttk.Frame(self.tab_xtables)
-        btn_frame.pack(fill='x', padx=10, pady=5)
-        
-        # Add file button
-        btn_add_files = ttk.Button(btn_frame, text="Add Files", 
-                                  command=lambda: self.add_local_files(xtables=True))
-        btn_add_files.pack(side='left', padx=5)
-        
-        # Clear list button
-        btn_clear_files = ttk.Button(btn_frame, text="Clear List", 
-                                    command=lambda: self.clear_local_files(xtables=True))
-        btn_clear_files.pack(side='left', padx=5)
-        
-        # Options frame
-        options_frame = ttk.LabelFrame(self.tab_xtables, text="Rule Options")
-        options_frame.pack(fill='x', padx=10, pady=5)
-        
-        # Chain selection
-        ttk.Label(options_frame, text="Chain:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-        self.chain_var = tk.StringVar()
-        chain_combo = ttk.Combobox(options_frame, textvariable=self.chain_var, 
-                                   values=["INPUT", "OUTPUT", "FORWARD"])
-        chain_combo.current(0)
-        chain_combo.grid(row=0, column=1, padx=5, pady=5, sticky='w')
-        
-        # Action selection
-        ttk.Label(options_frame, text="Action:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
-        self.action_var = tk.StringVar()
-        action_combo = ttk.Combobox(options_frame, textvariable=self.action_var, 
-                                    values=["ACCEPT", "DROP", "REJECT"])
-        action_combo.current(1)  # Default to DROP
-        action_combo.grid(row=1, column=1, padx=5, pady=5, sticky='w')
-        
-        # Match type
-        ttk.Label(options_frame, text="Match On:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
-        self.match_var = tk.StringVar()
-        match_combo = ttk.Combobox(options_frame, textvariable=self.match_var, 
-                                   values=["Source IP", "Destination IP"])
-        match_combo.current(0)  # Default to Source IP
-        match_combo.grid(row=2, column=1, padx=5, pady=5, sticky='w')
-        
-        # Optimize checkbox
-        self.xtables_optimize_var = tk.BooleanVar()
-        self.xtables_optimize_var.set(True)
-        chk_optimize = ttk.Checkbutton(options_frame, text="Optimize CIDR List", 
-                                       variable=self.xtables_optimize_var)
-        chk_optimize.grid(row=3, column=0, columnspan=2, padx=5, pady=5, sticky='w')
-        
-        # Generate button
-        btn_generate = ttk.Button(self.tab_xtables, text="Generate Rules", command=self.generate_xtables_rules)
-        btn_generate.pack(pady=10)
-        
-        # Results frame
-        results_frame = ttk.LabelFrame(self.tab_xtables, text="Generated Rules")
-        results_frame.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        self.xtables_results_text = tk.Text(results_frame, wrap='word', height=15)
-        self.xtables_results_text.pack(side='left', fill='both', expand=True, padx=5, pady=5)
-        
-        results_scrollbar = ttk.Scrollbar(results_frame, orient="vertical", command=self.xtables_results_text.yview)
-        results_scrollbar.pack(side='right', fill='y')
-        self.xtables_results_text.config(yscrollcommand=results_scrollbar.set)
-        
-        # Copy and save buttons
-        btn_copy = ttk.Button(self.tab_xtables, text="Copy Rules", command=self.copy_xtables_rules)
-        btn_copy.pack(side='left', padx=5, pady=5)
-        
-        btn_save = ttk.Button(self.tab_xtables, text="Save Rules", command=self.save_xtables_rules)
-        btn_save.pack(side='left', padx=5, pady=5)
-
-    def generate_xtables_rules(self):
-        files = self.listbox_files_xtables.get(0, tk.END)
-        if not files:
-            messagebox.showwarning("Warning", "No files selected.")
-            return
-        
-        chain = self.chain_var.get()
-        action = self.action_var.get()
-        match_on = self.match_var.get()
-        
-        if not chain or not action or not match_on:
-            messagebox.showwarning("Warning", "Please select chain, action, and match type.")
-            return
-        
-        match_flag = "-s" if match_on == "Source IP" else "-d"
-        
-        all_cidrs = []
-        
-        for file in files:
-            try:
-                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                cidrs = self.processor.extract_ips(content)
-                all_cidrs.extend(cidrs)
-            except Exception as e:
-                messagebox.showerror("Error", f"Error reading file {file}: {e}")
-                return
-        
-        # Remove duplicates
-        unique_cidrs = list(set(all_cidrs))
-        
-        if self.xtables_optimize_var.get():
-            optimized_cidrs = self.processor.optimize_cidr_list(unique_cidrs)
-            sorted_cidrs = self.processor.sort_ip_addresses(optimized_cidrs)
-        else:
-            sorted_cidrs = self.processor.sort_ip_addresses(unique_cidrs)
-        
-        # Generate rules
-        rules = []
-        for cidr in sorted_cidrs:
-            rule = f"iptables -A {chain} {match_flag} {cidr} -j {action}"
-            rules.append(rule)
-        
-        # Display in text area
-        self.xtables_results_text.delete(1.0, tk.END)
-        self.xtables_results_text.insert(tk.END, "\n".join(rules))
-    
-    def copy_xtables_rules(self):
-        content = self.xtables_results_text.get(1.0, tk.END).strip()
-        if content:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(content)
-            messagebox.showinfo("Copied", "Rules copied to clipboard.")
-        else:
-            messagebox.showwarning("Warning", "No rules to copy.")
-    
-    def save_xtables_rules(self):
-        content = self.xtables_results_text.get(1.0, tk.END).strip()
-        if not content:
-            messagebox.showwarning("Warning", "No rules to save.")
-            return
-        
-        output_path = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")]
-        )
-        
-        if output_path:
-            try:
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                messagebox.showinfo("Success", f"Rules saved to: {output_path}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Error saving rules: {e}")
 
     def refresh_masks(self):
         """Refresh the mask display and comboboxes."""
