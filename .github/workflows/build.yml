@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows 10] #ubuntu-latest,
+        os: [windows-latest] #ubuntu-latest,
         python-version: ['3.12']
     
     steps:
