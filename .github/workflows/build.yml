@@ -23,11 +23,8 @@ on:
         required: false
         type: string
   push:
-    branches: [ main, master ]
     tags:
       - 'v*'
-  pull_request:
-    branches: [ main, master ]
 
 jobs:
   build:
@@ -35,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest] #ubuntu-latest,
+        os: [windows-latest] #, ubuntu-latest
         python-version: ['3.12']
     
     steps:
@@ -70,44 +67,29 @@ jobs:
       
       - name: List build artifacts (Windows)
         if: matrix.os == 'windows-latest'
-        run: Get-ChildItem dist/
+        run: |
+          echo "=== Contents of dist/ directory ==="
+          Get-ChildItem dist/ -Recurse
         shell: pwsh
       
       - name: List build artifacts (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: ls -la dist/
-        shell: bash
-      
-      - name: Create version file
         run: |
-          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
-          VERSION=${VERSION#v}
-          if [ "$VERSION" == "main" ] || [ "$VERSION" == "master" ]; then
-            VERSION=$(date +'%Y%m%d%H%M')
-          fi
-          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
-          
-          # Ensure dist directory exists
-          mkdir -p dist
-          
-          # Create platform-specific version files
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            echo "$VERSION" > dist/windows_version.txt
-          else
-            echo "$VERSION" > dist/linux_version.txt
-          fi
+          echo "=== Contents of dist/ directory ==="
+          ls -laR dist/
         shell: bash
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ip_cidr_processor_${{ matrix.os }}
-          path: dist/
-          if-no-files-found: warn
+          name: ip_cidr_processor-${{ matrix.os }}-${{ matrix.python-version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 90
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -116,127 +98,211 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Set version from input or tag
+      - name: Determine version
+        id: version
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ github.event.inputs.version }}"
-            echo "Using manual version: $VERSION"
-            # Create tag for manual dispatch
-            git tag "v$VERSION"
-            git push origin "v$VERSION"
+            echo "Source: Manual workflow dispatch"
           else
             VERSION=${GITHUB_REF#refs/tags/v}
-            echo "Using tag version: $VERSION"
+            echo "Source: Git tag"
           fi
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "📌 Version: ${VERSION}"
+          echo "🏷️  Tag: v${VERSION}"
       
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
-          merge-multiple: true
+          path: release-artifacts
       
-      - name: Display structure of downloaded files
-        run: ls -R artifacts/
-      
-      - name: Create single version file
+      - name: Display downloaded artifacts
         run: |
-          echo "${{ env.VERSION }}" > artifacts/version.txt
+          echo "=== Downloaded artifacts structure ==="
+          ls -laR release-artifacts/
+          echo ""
+          echo "=== Artifact count ==="
+          find release-artifacts -type f | wc -l
       
-      - name: Setup Git config
+      - name: Prepare release assets
+        id: prepare
         run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      
-      - name: Prepare release files
-        run: |
-          VERSION=${{ env.VERSION }}
+          mkdir -p release-files
           
-          # Create releases directory
-          mkdir -p releases/v$VERSION
+          # Copy all files from artifacts to release-files
+          find release-artifacts -type f -exec cp {} release-files/ \;
           
-          # Copy artifacts
-          cp -r artifacts/* releases/v$VERSION/ || true
-          
-          # Create release info
-          cat > releases/v$VERSION/RELEASE_INFO.md << 'EOF'
-          # Release v$VERSION
-          
-          Released on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          Tag: v$VERSION
+          # Create version info file
+          cat > release-files/VERSION.txt << EOF
+          Version: ${{ steps.version.outputs.version }}
+          Release Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           Commit: ${{ github.sha }}
-          Trigger: ${{ github.event_name }}
-          
-          ## Build Information
-          - Workflow: ${{ github.workflow }}
-          - Run ID: ${{ github.run_id }}
-          - Actor: ${{ github.actor }}
-          
-          ## Custom Release Notes
-          ${{ github.event.inputs.release_notes }}
-          
-          ## Artifacts
+          Built by: GitHub Actions
+          Workflow Run: ${{ github.run_id }}
           EOF
           
-          # List actual files in artifacts
-          echo "Available files:" >> releases/v$VERSION/RELEASE_INFO.md
-          ls -la artifacts/ >> releases/v$VERSION/RELEASE_INFO.md || echo "No artifacts found" >> releases/v$VERSION/RELEASE_INFO.md
+          echo "=== Files prepared for release ==="
+          ls -lah release-files/
           
-          # Update latest release pointer
-          echo "v$VERSION" > LATEST_RELEASE
-          echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> LATEST_RELEASE
-          echo "https://github.com/${{ github.repository }}/releases/tag/v$VERSION" >> LATEST_RELEASE
+          # Count files
+          FILE_COUNT=$(find release-files -type f | wc -l)
+          echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
+          echo "📦 Total files: ${FILE_COUNT}"
       
-      - name: Commit and push release files
+      - name: Create or update tag
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          # Check if there are changes to commit
-          git add releases/v${{ env.VERSION }}/
-          git add LATEST_RELEASE
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          # Delete tag if exists (locally and remotely)
+          git tag -d "$TAG" 2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+          
+          # Create new tag
+          git tag -a "$TAG" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin "$TAG"
+          
+          echo "✅ Tag $TAG created and pushed"
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          NOTES_FILE="release_notes.md"
+          
+          cat > "$NOTES_FILE" << 'NOTES_EOF'
+          ## 🚀 IP CIDR Processor v${{ steps.version.outputs.version }}
+          
+          **Release Information:**
+          - 📅 Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - 🔧 Commit: `${{ github.sha }}`
+          - ⚡ Trigger: ${{ github.event_name }}
+          - 👤 Released by: ${{ github.actor }}
+          
+          NOTES_EOF
+          
+          # Add custom release notes if provided
+          if [ -n "${{ github.event.inputs.release_notes }}" ]; then
+            echo "" >> "$NOTES_FILE"
+            echo "### 📝 Release Notes" >> "$NOTES_FILE"
+            echo "${{ github.event.inputs.release_notes }}" >> "$NOTES_FILE"
+          fi
+          
+          # Add download instructions
+          cat >> "$NOTES_FILE" << 'DOWNLOAD_EOF'
+          
+          ### 📥 Download
+          
+          Download the appropriate executable for your operating system from the assets below:
+          
+          - **Windows**: `ip_cidr_processor-windows-latest-*.exe` or similar
+          - **Linux**: `ip_cidr_processor-ubuntu-latest-*` or similar
+          
+          ### 🔍 Files in this release
+          
+          DOWNLOAD_EOF
+          
+          # List files
+          echo '```' >> "$NOTES_FILE"
+          ls -lh release-files/ >> "$NOTES_FILE"
+          echo '```' >> "$NOTES_FILE"
+          
+          echo "notes_file=$NOTES_FILE" >> $GITHUB_OUTPUT
+          
+          echo "=== Generated Release Notes ==="
+          cat "$NOTES_FILE"
+      
+      - name: Check if release exists
+        id: check_release
+        continue-on-error: true
+        run: |
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ steps.version.outputs.tag }}")
+          
+          if [ "$RESPONSE" = "200" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⚠️  Release already exists"
           else
-            git commit -m "📦 Add release artifacts for v${{ env.VERSION }}"
-            git push origin main
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Release does not exist, will create new one"
+          fi
+      
+      - name: Delete existing release if exists
+        if: steps.check_release.outputs.exists == 'true'
+        continue-on-error: true
+        run: |
+          RELEASE_ID=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ steps.version.outputs.tag }}" \
+            | jq -r '.id')
+          
+          if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
+            curl -X DELETE \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID"
+            echo "🗑️  Deleted existing release"
+            sleep 2
           fi
       
       - name: Create GitHub Release
         id: create_release
         if: github.event.inputs.create_release != 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION }}
-          name: IP CIDR Processor v${{ env.VERSION }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: IP CIDR Processor ${{ steps.version.outputs.tag }}
+          body_path: ${{ steps.release_notes.outputs.notes_file }}
           draft: false
           prerelease: ${{ github.event.inputs.prerelease == 'true' }}
-          generate_release_notes: true
-          body: |
-            🚀 **Release v${{ env.VERSION }}**
-            
-            Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-            Commit: ${{ github.sha }}
-            Trigger: ${{ github.event_name }}
-            
-            ${{ github.event.inputs.release_notes }}
-            
-            ## Download
-            Choose the appropriate executable for your platform:
-            
-            ### Files in this release:
+          generate_release_notes: false
           files: |
-            artifacts/*
+            release-files/*
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Verify release creation
         run: |
-          echo "✅ Release process completed!"
-          echo "🔗 Release URL: ${{ steps.create_release.outputs.url }}"
-          echo "📁 Release files committed to repository"
-          echo "🏷️  Tag: v${{ env.VERSION }}"
-          echo "📋 Files in repository:"
-          ls -la releases/v${{ env.VERSION }}/ || echo "Release directory not found"
+          echo "════════════════════════════════════════"
+          echo "✅ RELEASE CREATED SUCCESSFULLY!"
+          echo "════════════════════════════════════════"
+          echo ""
+          echo "📋 Release Details:"
+          echo "  • Version: ${{ steps.version.outputs.version }}"
+          echo "  • Tag: ${{ steps.version.outputs.tag }}"
+          echo "  • Files: ${{ steps.prepare.outputs.file_count }}"
+          echo "  • Prerelease: ${{ github.event.inputs.prerelease }}"
+          echo ""
+          
+          if [ -n "${{ steps.create_release.outputs.url }}" ]; then
+            echo "🔗 Release URL:"
+            echo "   ${{ steps.create_release.outputs.url }}"
+          else
+            echo "🔗 Release URL:"
+            echo "   https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
+          fi
+          
+          echo ""
+          echo "════════════════════════════════════════"
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "### 🎉 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${{ steps.version.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`${{ steps.version.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Files | ${{ steps.prepare.outputs.file_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Prerelease | ${{ github.event.inputs.prerelease }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | ✅ Success |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "[🔗 View Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }})" >> $GITHUB_STEP_SUMMARY
