@@ -125,6 +125,9 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             VERSION="${{ github.event.inputs.version }}"
             echo "Using manual version: $VERSION"
+            # Create tag for manual dispatch
+            git tag "v$VERSION"
+            git push origin "v$VERSION"
           else
             VERSION=${GITHUB_REF#refs/tags/v}
             echo "Using tag version: $VERSION"
@@ -161,10 +164,10 @@ jobs:
           
           # Create release info
           cat > releases/v$VERSION/RELEASE_INFO.md << 'EOF'
-          # Release v${{ env.VERSION }}
+          # Release v$VERSION
           
           Released on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          Tag: v${{ env.VERSION }}
+          Tag: v$VERSION
           Commit: ${{ github.sha }}
           Trigger: ${{ github.event_name }}
           
@@ -180,7 +183,6 @@ jobs:
           EOF
           
           # List actual files in artifacts
-          echo "" >> releases/v$VERSION/RELEASE_INFO.md
           echo "Available files:" >> releases/v$VERSION/RELEASE_INFO.md
           ls -la artifacts/ >> releases/v$VERSION/RELEASE_INFO.md || echo "No artifacts found" >> releases/v$VERSION/RELEASE_INFO.md
           
@@ -189,20 +191,7 @@ jobs:
           echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> LATEST_RELEASE
           echo "https://github.com/${{ github.repository }}/releases/tag/v$VERSION" >> LATEST_RELEASE
       
-      - name: Create tag if needed (workflow_dispatch only)
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          # Check if tag exists
-          if git rev-parse "v${{ env.VERSION }}" >/dev/null 2>&1; then
-            echo "Tag v${{ env.VERSION }} already exists"
-          else
-            echo "Creating tag v${{ env.VERSION }}"
-            git tag "v${{ env.VERSION }}"
-            git push origin "v${{ env.VERSION }}"
-          fi
-      
       - name: Commit and push release files
-        continue-on-error: true
         run: |
           # Check if there are changes to commit
           git add releases/v${{ env.VERSION }}/
@@ -212,18 +201,13 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "📦 Add release artifacts for v${{ env.VERSION }}"
-            
-            # Try to push, but don't fail if it doesn't work
-            git push origin HEAD:main || {
-              echo "⚠️ Could not push to main branch (may be protected)"
-              echo "Release files created but not committed to repository"
-            }
+            git push origin main
           fi
       
       - name: Create GitHub Release
         id: create_release
         if: github.event.inputs.create_release != 'false'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ env.VERSION }}
           name: IP CIDR Processor v${{ env.VERSION }}
@@ -233,28 +217,26 @@ jobs:
           body: |
             🚀 **Release v${{ env.VERSION }}**
             
-            Built on: ${{ github.event.repository.updated_at }}
+            Built on: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
             Commit: ${{ github.sha }}
             Trigger: ${{ github.event_name }}
             
             ${{ github.event.inputs.release_notes }}
             
             ## Download
-            Choose the appropriate executable for your platform below.
+            Choose the appropriate executable for your platform:
+            
+            ### Files in this release:
           files: |
-            artifacts/**/*
+            artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Verify release creation
         run: |
           echo "✅ Release process completed!"
-          if [ -n "${{ steps.create_release.outputs.url }}" ]; then
-            echo "🔗 Release URL: ${{ steps.create_release.outputs.url }}"
-          fi
+          echo "🔗 Release URL: ${{ steps.create_release.outputs.url }}"
+          echo "📁 Release files committed to repository"
           echo "🏷️  Tag: v${{ env.VERSION }}"
-          echo "📋 Files included in release:"
-          ls -la artifacts/ || echo "No artifacts directory found"
-          echo ""
-          echo "📁 Release files in repository (if committed):"
-          ls -la releases/v${{ env.VERSION }}/ || echo "Release directory not accessible"
+          echo "📋 Files in repository:"
+          ls -la releases/v${{ env.VERSION }}/ || echo "Release directory not found"
