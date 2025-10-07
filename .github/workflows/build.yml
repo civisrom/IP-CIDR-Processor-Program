@@ -137,7 +137,7 @@ jobs:
           find release-artifacts -type f -exec cp {} release-files/ \;
           
           # Create version info file
-          cat > release-files/VERSION.txt << EOF
+          cat > release-files/VERSION.txt << 'EOF'
           Version: ${{ steps.version.outputs.version }}
           Release Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           Commit: ${{ github.sha }}
