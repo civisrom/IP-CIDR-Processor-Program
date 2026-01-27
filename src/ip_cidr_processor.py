@@ -13,6 +13,13 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 import requests
 from typing import List, Dict, Set, Union, Tuple, Optional
 
+# Try to import tkinterdnd2 for drag and drop support
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    TKDND_AVAILABLE = True
+except ImportError:
+    TKDND_AVAILABLE = False
+
 
 class IPCIDRProcessor:
     def __init__(self):
@@ -554,9 +561,15 @@ class IPCIDRProcessorGUI:
     def __init__(self, processor: IPCIDRProcessor):
         """Initialize the GUI for the IP CIDR processor."""
         self.processor = processor
-        self.root = tk.Tk()
-        self.root.title("IP CIDR Processor")
-        self.root.geometry("850x650")
+
+        # Use TkinterDnD if available for drag and drop support
+        if TKDND_AVAILABLE:
+            self.root = TkinterDnD.Tk()
+        else:
+            self.root = tk.Tk()
+
+        self.root.title("IP CIDR Processor" + (" (Drag & Drop Enabled)" if TKDND_AVAILABLE else ""))
+        self.root.geometry("900x700")
     
         # Register cleanup on exit
         atexit.register(self.cleanup)
@@ -595,10 +608,86 @@ class IPCIDRProcessorGUI:
         
         # Add IPv6 checkbox to relevant tabs
         self.add_ip_version_options()
-        
+
+        # Setup keyboard shortcuts
+        self.setup_keyboard_shortcuts()
+
+        # Setup status bar
+        self.setup_status_bar()
+
+        # Update status bar
+        self.update_status_bar()
+
         # Start the main loop
         self.root.mainloop()
     
+    def enable_drag_and_drop(self, listbox: tk.Listbox, listbox_type: str = "files"):
+        """Enable drag and drop for a listbox.
+
+        Args:
+            listbox: The listbox widget to enable drag and drop on
+            listbox_type: Type of listbox ("files" or "urls")
+        """
+        if TKDND_AVAILABLE:
+            # Use tkinterdnd2 for proper drag and drop support
+            listbox.drop_target_register(DND_FILES)
+            listbox.dnd_bind('<<Drop>>', lambda e: self._on_drop(e, listbox, listbox_type))
+
+            # Add visual feedback
+            def on_drag_enter(event):
+                listbox.config(bg='#e8f4f8')
+                return event.action
+
+            def on_drag_leave(event):
+                listbox.config(bg='white')
+                return event.action
+
+            listbox.dnd_bind('<<DragEnter>>', on_drag_enter)
+            listbox.dnd_bind('<<DragLeave>>', on_drag_leave)
+        else:
+            # Fallback: Add a label to indicate that drag and drop is not available
+            # But still keep the manual file selection working
+            pass
+
+    def _on_drop(self, event, listbox: tk.Listbox, listbox_type: str):
+        """Handle drop event for files or URLs.
+
+        Args:
+            event: The drop event
+            listbox: The target listbox
+            listbox_type: Type of listbox ("files" or "urls")
+        """
+        # Reset background color
+        listbox.config(bg='white')
+
+        # Get dropped files
+        files = self.root.tk.splitlist(event.data)
+
+        if listbox_type == "files":
+            # Add files to listbox
+            for file in files:
+                file = file.strip('{}')  # Remove curly braces if present
+                if os.path.isfile(file) and file not in listbox.get(0, tk.END):
+                    listbox.insert(tk.END, file)
+                elif os.path.isdir(file):
+                    # If it's a directory, add all text files from it
+                    for root, dirs, filenames in os.walk(file):
+                        for filename in filenames:
+                            if filename.endswith(('.txt', '.log', '.dat', '.csv')):
+                                filepath = os.path.join(root, filename)
+                                if filepath not in listbox.get(0, tk.END):
+                                    listbox.insert(tk.END, filepath)
+        elif listbox_type == "urls":
+            # For URL listbox, treat dropped text as URLs
+            for item in files:
+                item = item.strip('{}')
+                # Check if it looks like a URL
+                if item.startswith(('http://', 'https://', 'ftp://')):
+                    if item not in listbox.get(0, tk.END):
+                        listbox.insert(tk.END, item)
+
+        return event.action
+
     def add_ip_version_options(self):
         """Add IPv4 and IPv6 support options to relevant tabs."""
         tabs = {
@@ -611,29 +700,249 @@ class IPCIDRProcessorGUI:
         for tab_name, tab_frame in tabs.items():
             ip_frame = ttk.Frame(tab_frame)
             ip_frame.pack(fill='x', padx=10, pady=5)
-            
+
             ipv4_var = tk.BooleanVar(value=True)  # Default to True for backward compatibility
             setattr(self, f"{tab_name}_ipv4_var", ipv4_var)
             chk_ipv4 = ttk.Checkbutton(ip_frame, text="Include IPv4", variable=ipv4_var)
             chk_ipv4.pack(side='left', padx=5)
-            
+
             ipv6_var = tk.BooleanVar(value=True)  # Default to True as before
             setattr(self, f"{tab_name}_ipv6_var", ipv6_var)
             chk_ipv6 = ttk.Checkbutton(ip_frame, text="Include IPv6", variable=ipv6_var)
             chk_ipv6.pack(side='left', padx=5)
 
+    def setup_keyboard_shortcuts(self):
+        """Setup keyboard shortcuts for common operations."""
+        # Ctrl+O - Open/Add files
+        self.root.bind('<Control-o>', lambda e: self.add_files_shortcut())
+
+        # Ctrl+S - Save results (if on appropriate tab)
+        self.root.bind('<Control-s>', lambda e: self.save_shortcut())
+
+        # Delete - Remove selected items from listbox
+        self.root.bind('<Delete>', lambda e: self.delete_selected_items())
+
+        # Ctrl+A - Select all in current listbox
+        self.root.bind('<Control-a>', lambda e: self.select_all_items())
+
+        # F5 - Refresh/Process
+        self.root.bind('<F5>', lambda e: self.process_shortcut())
+
+        # Ctrl+Q - Quit
+        self.root.bind('<Control-q>', lambda e: self.on_closing())
+
+    def add_files_shortcut(self):
+        """Add files via keyboard shortcut based on current tab."""
+        current_tab = self.notebook.index(self.notebook.select())
+        if current_tab == 0:  # Process Files
+            self.add_local_files()
+        elif current_tab == 2:  # Optimize
+            self.add_local_files(optimize=True)
+        elif current_tab == 3:  # URL
+            self.add_url()
+        elif current_tab == 4:  # Batch
+            self.add_local_files(batch=True)
+
+    def save_shortcut(self):
+        """Save results via keyboard shortcut based on current tab."""
+        current_tab = self.notebook.index(self.notebook.select())
+        if current_tab == 1:  # IP Ranges tab
+            self.save_results()
+
+    def delete_selected_items(self):
+        """Delete selected items from the current listbox."""
+        current_tab = self.notebook.index(self.notebook.select())
+        listbox = None
+
+        if current_tab == 0:  # Process Files
+            listbox = self.listbox_files
+        elif current_tab == 2:  # Optimize
+            listbox = self.listbox_files_optimize
+        elif current_tab == 3:  # URL
+            listbox = self.listbox_urls
+        elif current_tab == 4:  # Batch
+            listbox = self.listbox_batch_files
+
+        if listbox:
+            selection = listbox.curselection()
+            if selection:
+                for index in reversed(selection):
+                    listbox.delete(index)
+
+    def select_all_items(self):
+        """Select all items in the current listbox."""
+        current_tab = self.notebook.index(self.notebook.select())
+        listbox = None
+
+        if current_tab == 0:  # Process Files
+            listbox = self.listbox_files
+        elif current_tab == 2:  # Optimize
+            listbox = self.listbox_files_optimize
+        elif current_tab == 3:  # URL
+            listbox = self.listbox_urls
+        elif current_tab == 4:  # Batch
+            listbox = self.listbox_batch_files
+
+        if listbox:
+            listbox.select_set(0, tk.END)
+
+    def process_shortcut(self):
+        """Process files via F5 shortcut based on current tab."""
+        current_tab = self.notebook.index(self.notebook.select())
+        if current_tab == 0:  # Process Files
+            self.process_local_files()
+        elif current_tab == 2:  # Optimize
+            self.optimize_files()
+        elif current_tab == 3:  # URL
+            self.process_urls()
+        elif current_tab == 4:  # Batch
+            self.process_batch_files()
+
+    def add_context_menu(self, listbox: tk.Listbox, listbox_type: str = "files"):
+        """Add context menu to a listbox.
+
+        Args:
+            listbox: The listbox widget
+            listbox_type: Type of listbox ("files" or "urls")
+        """
+        context_menu = tk.Menu(listbox, tearoff=0)
+
+        if listbox_type == "files":
+            context_menu.add_command(label="Add Files...", command=lambda: self.add_files_for_listbox(listbox))
+            context_menu.add_separator()
+
+        context_menu.add_command(label="Remove Selected", command=lambda: self.remove_selected_from_listbox(listbox))
+        context_menu.add_command(label="Clear All", command=lambda: listbox.delete(0, tk.END))
+        context_menu.add_separator()
+        context_menu.add_command(label="Select All", command=lambda: listbox.select_set(0, tk.END))
+
+        if listbox_type == "files":
+            context_menu.add_separator()
+            context_menu.add_command(label="Open File Location", command=lambda: self.open_file_location(listbox))
+
+        def show_context_menu(event):
+            try:
+                context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                context_menu.grab_release()
+
+        listbox.bind("<Button-3>", show_context_menu)  # Right-click
+        listbox.bind("<Control-Button-1>", show_context_menu)  # Ctrl+Click for macOS
+
+    def add_files_for_listbox(self, listbox: tk.Listbox):
+        """Add files to a specific listbox."""
+        files = filedialog.askopenfilenames(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
+        for file in files:
+            if file not in listbox.get(0, tk.END):
+                listbox.insert(tk.END, file)
+
+    def remove_selected_from_listbox(self, listbox: tk.Listbox):
+        """Remove selected items from a listbox."""
+        selection = listbox.curselection()
+        for index in reversed(selection):
+            listbox.delete(index)
+
+    def open_file_location(self, listbox: tk.Listbox):
+        """Open the file location of the selected item."""
+        selection = listbox.curselection()
+        if selection:
+            file_path = listbox.get(selection[0])
+            if os.path.exists(file_path):
+                folder_path = os.path.dirname(file_path)
+                # Open folder in file explorer (cross-platform)
+                if os.name == 'nt':  # Windows
+                    os.startfile(folder_path)
+                elif os.name == 'posix':  # Linux/Mac
+                    import subprocess
+                    if 'darwin' in os.uname().sysname.lower():  # macOS
+                        subprocess.Popen(['open', folder_path])
+                    else:  # Linux
+                        subprocess.Popen(['xdg-open', folder_path])
+
+    def setup_status_bar(self):
+        """Setup status bar at the bottom of the window."""
+        self.status_frame = ttk.Frame(self.root)
+        self.status_frame.pack(side='bottom', fill='x')
+
+        # Status label
+        self.status_var = tk.StringVar(value="Ready")
+        self.status_label = ttk.Label(self.status_frame, textvariable=self.status_var, relief='sunken', anchor='w')
+        self.status_label.pack(side='left', fill='x', expand=True, padx=2, pady=2)
+
+        # File count label
+        self.file_count_var = tk.StringVar(value="Files: 0")
+        self.file_count_label = ttk.Label(self.status_frame, textvariable=self.file_count_var, relief='sunken', anchor='center', width=15)
+        self.file_count_label.pack(side='right', padx=2, pady=2)
+
+    def update_status_bar(self, message: str = "Ready"):
+        """Update the status bar with current information.
+
+        Args:
+            message: Status message to display
+        """
+        self.status_var.set(message)
+
+        # Update file count based on current tab
+        current_tab = self.notebook.index(self.notebook.select())
+        count = 0
+
+        if current_tab == 0:  # Process Files
+            count = self.listbox_files.size()
+        elif current_tab == 2:  # Optimize
+            count = self.listbox_files_optimize.size()
+        elif current_tab == 3:  # URL
+            count = self.listbox_urls.size()
+        elif current_tab == 4:  # Batch
+            count = self.listbox_batch_files.size()
+
+        if current_tab in [0, 2, 4]:  # File tabs
+            self.file_count_var.set(f"Files: {count}")
+        elif current_tab == 3:  # URL tab
+            self.file_count_var.set(f"URLs: {count}")
+        else:
+            self.file_count_var.set("")
+
+        # Schedule next update
+        self.root.after(500, lambda: self.update_status_bar(self.status_var.get()))
+
+    def validate_url(self, url: str) -> bool:
+        """Validate if a string is a valid URL.
+
+        Args:
+            url: URL string to validate
+
+        Returns:
+            True if valid, False otherwise
+        """
+        import re
+        # Simple URL validation regex
+        url_pattern = re.compile(
+            r'^https?://'  # http:// or https://
+            r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain...
+            r'localhost|'  # localhost...
+            r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
+            r'(?::\d+)?'  # optional port
+            r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+        return url_pattern.match(url) is not None
+
     def setup_process_tab(self):
         """Set up the file processing tab."""
-        frame_files = ttk.LabelFrame(self.tab_process, text="Select Files")
+        frame_files = ttk.LabelFrame(self.tab_process, text="Select Files (Drag & Drop Supported)" if TKDND_AVAILABLE else "Select Files")
         frame_files.pack(fill='both', expand=True, padx=10, pady=5)
-        
+
         self.listbox_files = tk.Listbox(frame_files)
         self.listbox_files.pack(side='left', fill='both', expand=True)
-        
+
         scrollbar = ttk.Scrollbar(frame_files, orient="vertical", command=self.listbox_files.yview)
         scrollbar.pack(side='right', fill='y')
         self.listbox_files.config(yscrollcommand=scrollbar.set)
-        
+
+        # Enable drag and drop
+        self.enable_drag_and_drop(self.listbox_files, "files")
+
+        # Add context menu
+        self.add_context_menu(self.listbox_files, "files")
+
         btn_frame = ttk.Frame(self.tab_process)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
@@ -700,16 +1009,22 @@ class IPCIDRProcessorGUI:
 
     def setup_optimize_tab(self):
         """Set up the CIDR optimization tab."""
-        frame_files = ttk.LabelFrame(self.tab_optimize, text="Select Files with CIDR Notations")
+        frame_files = ttk.LabelFrame(self.tab_optimize, text="Select Files with CIDR Notations (Drag & Drop Supported)" if TKDND_AVAILABLE else "Select Files with CIDR Notations")
         frame_files.pack(fill='both', expand=True, padx=10, pady=5)
-        
+
         self.listbox_files_optimize = tk.Listbox(frame_files)
         self.listbox_files_optimize.pack(side='left', fill='both', expand=True)
-        
+
         scrollbar = ttk.Scrollbar(frame_files, orient="vertical", command=self.listbox_files_optimize.yview)
         scrollbar.pack(side='right', fill='y')
         self.listbox_files_optimize.config(yscrollcommand=scrollbar.set)
-        
+
+        # Enable drag and drop
+        self.enable_drag_and_drop(self.listbox_files_optimize, "files")
+
+        # Add context menu
+        self.add_context_menu(self.listbox_files_optimize, "files")
+
         btn_frame = ttk.Frame(self.tab_optimize)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
@@ -732,16 +1047,22 @@ class IPCIDRProcessorGUI:
 
     def setup_url_tab(self):
         """Set up the URL processing tab."""
-        frame_urls = ttk.LabelFrame(self.tab_url, text="URL Processing")
+        frame_urls = ttk.LabelFrame(self.tab_url, text="URL Processing (Drag & Drop Supported)" if TKDND_AVAILABLE else "URL Processing")
         frame_urls.pack(fill='both', expand=True, padx=10, pady=5)
-        
+
         self.listbox_urls = tk.Listbox(frame_urls)
         self.listbox_urls.pack(side='left', fill='both', expand=True)
-        
+
         scrollbar = ttk.Scrollbar(frame_urls, orient="vertical", command=self.listbox_urls.yview)
         scrollbar.pack(side='right', fill='y')
         self.listbox_urls.config(yscrollcommand=scrollbar.set)
-        
+
+        # Enable drag and drop for URLs (can drop text files or URLs)
+        self.enable_drag_and_drop(self.listbox_urls, "urls")
+
+        # Add context menu
+        self.add_context_menu(self.listbox_urls, "urls")
+
         btn_frame = ttk.Frame(self.tab_url)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
@@ -870,16 +1191,22 @@ class IPCIDRProcessorGUI:
     def setup_batch_tab(self):
         """Настройка вкладки пакетной обработки с кнопкой Стоп."""
         # Files frame
-        frame_files = ttk.LabelFrame(self.tab_batch, text="Select Files for Batch Processing")
+        frame_files = ttk.LabelFrame(self.tab_batch, text="Select Files for Batch Processing (Drag & Drop Supported)" if TKDND_AVAILABLE else "Select Files for Batch Processing")
         frame_files.pack(fill='both', expand=True, padx=10, pady=5)
-        
+
         self.listbox_batch_files = tk.Listbox(frame_files)
         self.listbox_batch_files.pack(side='left', fill='both', expand=True)
-        
+
         scrollbar = ttk.Scrollbar(frame_files, orient="vertical", command=self.listbox_batch_files.yview)
         scrollbar.pack(side='right', fill='y')
         self.listbox_batch_files.config(yscrollcommand=scrollbar.set)
-        
+
+        # Enable drag and drop
+        self.enable_drag_and_drop(self.listbox_batch_files, "files")
+
+        # Add context menu
+        self.add_context_menu(self.listbox_batch_files, "files")
+
         # Button frame
         btn_frame = ttk.Frame(self.tab_batch)
         btn_frame.pack(fill='x', padx=10, pady=5)
@@ -1384,10 +1711,18 @@ class IPCIDRProcessorGUI:
                 messagebox.showerror("Error", f"Error saving results: {e}")
 
     def add_url(self):
-        """Add a URL to the URL listbox."""
+        """Add a URL to the URL listbox with validation."""
         url = simpledialog.askstring("Add URL", "Enter URL:")
-        if url and url not in self.listbox_urls.get(0, tk.END):
-            self.listbox_urls.insert(tk.END, url)
+        if url:
+            url = url.strip()
+            if not self.validate_url(url):
+                messagebox.showwarning("Invalid URL", "The entered URL is not valid. Please enter a valid URL starting with http:// or https://")
+                return
+            if url not in self.listbox_urls.get(0, tk.END):
+                self.listbox_urls.insert(tk.END, url)
+                self.update_status_bar(f"Added URL: {url[:50]}...")
+            else:
+                messagebox.showinfo("Duplicate", "This URL is already in the list.")
 
     def clear_urls(self):
         """Clear the URL listbox."""
@@ -1452,12 +1787,6 @@ class IPCIDRProcessorGUI:
                 messagebox.showinfo("Success", message)
             except Exception as e:
                 messagebox.showerror("Error", f"Error saving results: {e}")
-
-    def browse_batch_output_folder(self):
-        """Browse for output folder for batch processing."""
-        folder = filedialog.askdirectory(title="Select Output Folder")
-        if folder:
-            self.batch_output_folder_var.set(folder)
 
     # Mask Settings Tab Methods
     def add_new_mask(self):
