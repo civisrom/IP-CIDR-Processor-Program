@@ -107,12 +107,15 @@ Process multiple files in parallel
 - Stop processing at any time
 - Detailed statistics
 
-### 6. Mask Settings
-Create and manage custom output formats
-- Define prefix, suffix, and separator
-- Built-in templates (default, clash, custom)
-- Import/Export mask configurations
-- Set default mask
+### 6. Mask Settings ✨ NEW ENHANCED ✨
+**30+ predefined templates** organized by category!
+- **Filter by Category**: Basic, Clash, Surge, Quantumult, Firewall, Router, DNS, Programming, and more
+- **Preview Function**: See formatted output before applying
+- **Duplicate Masks**: Copy and customize existing templates
+- **Rich Descriptions**: Every mask includes usage information
+- **Categories**: Basic, Clash, Surge, Quantumult, Shadowrocket, Firewall, Router, DNS, Programming, Other
+
+**See [MASK_TEMPLATES.md](MASK_TEMPLATES.md) for complete mask documentation**
 
 ### 7. Configuration
 Manage application settings
@@ -123,33 +126,46 @@ Manage application settings
 
 ## Output Masks
 
-### Built-in Masks
+### Sample Built-in Masks (30+ Available!)
 
-**Default Mask**
-```
-192.168.1.0/24
-10.0.0.0/8
-```
+#### Basic Category
+- **default**: Plain IP list `192.168.1.0/24`
+- **space-separated**: Space delimited `192.168.1.0/24 10.0.0.0/8`
 
-**Clash Mask**
-```
-IP-CIDR,192.168.1.0/24,no-resolve
-IP-CIDR,10.0.0.0/8,no-resolve
-```
+#### Clash Category
+- **clash**: `IP-CIDR,192.168.1.0/24,no-resolve`
+- **clash-ipv6**: `IP-CIDR6,2001:db8::/32,no-resolve`
 
-**Custom Mask**
-```
-[192.168.1.0/24], [10.0.0.0/8]
-```
+#### Programming Category
+- **json-array**: `  "192.168.1.0/24",`
+- **python-list**: `    "192.168.1.0/24",`
+- **csv**: `192.168.1.0/24,10.0.0.0/8`
+
+#### Firewall Category
+- **iptables-drop**: `iptables -A INPUT -s 192.168.1.0/24 -j DROP`
+- **ufw-deny**: `ufw deny from 192.168.1.0/24`
+
+#### Router Category
+- **mikrotik**: `/ip firewall address-list add list=blocked address=192.168.1.0/24`
+- **cisco-acl**: `deny ip 192.168.1.0/24 any`
+
+**[View all 30+ templates →](MASK_TEMPLATES.md)**
 
 ### Creating Custom Masks
 
 1. Go to **Mask Settings** tab
-2. Enter mask name
-3. Define prefix (text before IP)
-4. Define suffix (text after IP)
-5. Set separator (use `\n` for newline)
-6. Click **Add Mask**
+2. **Filter** by category or view all
+3. **Preview** similar masks using the 👁 button
+4. **Duplicate** (⎘) an existing mask or create new
+5. Fill in details:
+   - **Name**: Unique identifier
+   - **Category**: For organization
+   - **Prefix**: Text before each IP
+   - **Suffix**: Text after each IP
+   - **Separator**: Between IPs (`\n` for newline, `\t` for tab)
+   - **Description**: Help text
+6. Click **Preview** to test with sample IPs
+7. Click **Add Mask** to save
 
 ## Examples
 
@@ -228,7 +244,18 @@ For issues and questions:
 
 ## Changelog
 
-### Version 2.0.0
+### Version 2.1.0 - Enhanced Mask System 🎭
+- ✨ **30+ Predefined Mask Templates** across 9 categories
+- ✨ **Category-Based Organization** for easy navigation
+- ✨ **Preview Function** - See formatted output before applying
+- ✨ **Duplicate Mask Feature** - Copy and customize templates
+- ✨ **Enhanced Mask Editor** with category and description fields
+- ✨ **Filter by Category** - Find masks quickly
+- ✨ **Detailed Mask Guide** - Comprehensive documentation
+- 🎨 **Improved UI** with icons and better layout
+- 📚 **New Categories**: Basic, Clash, Surge, Quantumult, Shadowrocket, Firewall, Router, DNS, Programming, Other
+
+### Version 2.0.0 - User Experience Overhaul
 - ✨ Added drag and drop support
 - ✨ Added keyboard shortcuts
 - ✨ Added context menus

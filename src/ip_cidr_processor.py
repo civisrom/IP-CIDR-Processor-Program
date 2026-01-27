@@ -28,9 +28,52 @@ class IPCIDRProcessor:
         self.config_file = 'ip_cidr_config.yaml'
         self.default_config = {
             'masks': [
-                {'name': 'default', 'prefix': '', 'suffix': '', 'separator': '\n'},
-                {'name': 'clash', 'prefix': 'IP-CIDR,', 'suffix': ',no-resolve', 'separator': '\n'},
-                {'name': 'custom', 'prefix': '[', 'suffix': ']', 'separator': ', '}
+                # Basic masks
+                {'name': 'default', 'category': 'Basic', 'prefix': '', 'suffix': '', 'separator': '\n', 'description': 'Plain IP list, one per line'},
+                {'name': 'custom', 'category': 'Basic', 'prefix': '[', 'suffix': ']', 'separator': ', ', 'description': 'Bracket-wrapped, comma separated'},
+                {'name': 'space-separated', 'category': 'Basic', 'prefix': '', 'suffix': '', 'separator': ' ', 'description': 'Space separated list'},
+
+                # Clash and derivatives
+                {'name': 'clash', 'category': 'Clash', 'prefix': 'IP-CIDR,', 'suffix': ',no-resolve', 'separator': '\n', 'description': 'Clash IP-CIDR format'},
+                {'name': 'clash-resolve', 'category': 'Clash', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n', 'description': 'Clash IP-CIDR with resolve'},
+                {'name': 'clash-ipv6', 'category': 'Clash', 'prefix': 'IP-CIDR6,', 'suffix': ',no-resolve', 'separator': '\n', 'description': 'Clash IPv6 format'},
+
+                # Surge
+                {'name': 'surge', 'category': 'Surge', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n', 'description': 'Surge IP-CIDR format'},
+                {'name': 'surge-ipv6', 'category': 'Surge', 'prefix': 'IP-CIDR6,', 'suffix': '', 'separator': '\n', 'description': 'Surge IPv6 format'},
+
+                # Quantumult X
+                {'name': 'quantumult-x', 'category': 'Quantumult', 'prefix': 'IP-CIDR,', 'suffix': ',REJECT', 'separator': '\n', 'description': 'Quantumult X reject format'},
+                {'name': 'quantumult-x-direct', 'category': 'Quantumult', 'prefix': 'IP-CIDR,', 'suffix': ',DIRECT', 'separator': '\n', 'description': 'Quantumult X direct format'},
+
+                # Shadowrocket
+                {'name': 'shadowrocket', 'category': 'Shadowrocket', 'prefix': 'IP-CIDR,', 'suffix': '', 'separator': '\n', 'description': 'Shadowrocket format'},
+
+                # Programming formats
+                {'name': 'json-array', 'category': 'Programming', 'prefix': '  "', 'suffix': '"', 'separator': ',\n', 'description': 'JSON array format'},
+                {'name': 'python-list', 'category': 'Programming', 'prefix': '    "', 'suffix': '"', 'separator': ',\n', 'description': 'Python list format'},
+                {'name': 'csv', 'category': 'Programming', 'prefix': '', 'suffix': '', 'separator': ',', 'description': 'CSV format'},
+                {'name': 'yaml-list', 'category': 'Programming', 'prefix': '  - ', 'suffix': '', 'separator': '\n', 'description': 'YAML list format'},
+
+                # Firewall formats
+                {'name': 'iptables-drop', 'category': 'Firewall', 'prefix': 'iptables -A INPUT -s ', 'suffix': ' -j DROP', 'separator': '\n', 'description': 'iptables DROP rule'},
+                {'name': 'iptables-accept', 'category': 'Firewall', 'prefix': 'iptables -A INPUT -s ', 'suffix': ' -j ACCEPT', 'separator': '\n', 'description': 'iptables ACCEPT rule'},
+                {'name': 'ufw-deny', 'category': 'Firewall', 'prefix': 'ufw deny from ', 'suffix': '', 'separator': '\n', 'description': 'UFW deny rule'},
+                {'name': 'ufw-allow', 'category': 'Firewall', 'prefix': 'ufw allow from ', 'suffix': '', 'separator': '\n', 'description': 'UFW allow rule'},
+
+                # Router formats
+                {'name': 'mikrotik', 'category': 'Router', 'prefix': '/ip firewall address-list add list=blocked address=', 'suffix': '', 'separator': '\n', 'description': 'MikroTik address list'},
+                {'name': 'cisco-acl', 'category': 'Router', 'prefix': 'deny ip ', 'suffix': ' any', 'separator': '\n', 'description': 'Cisco ACL deny'},
+
+                # DNS/AdBlock formats
+                {'name': 'hosts', 'category': 'DNS', 'prefix': '0.0.0.0 ', 'suffix': '', 'separator': '\n', 'description': 'Hosts file format'},
+                {'name': 'dnsmasq', 'category': 'DNS', 'prefix': 'address=/', 'suffix': '/0.0.0.0', 'separator': '\n', 'description': 'Dnsmasq format'},
+
+                # Other formats
+                {'name': 'quoted', 'category': 'Other', 'prefix': '"', 'suffix': '"', 'separator': ',\n', 'description': 'Quoted with commas'},
+                {'name': 'single-quoted', 'category': 'Other', 'prefix': "'", 'suffix': "'", 'separator': ',\n', 'description': 'Single quoted with commas'},
+                {'name': 'html-list', 'category': 'Other', 'prefix': '<li>', 'suffix': '</li>', 'separator': '\n', 'description': 'HTML list items'},
+                {'name': 'markdown-list', 'category': 'Other', 'prefix': '- ', 'suffix': '', 'separator': '\n', 'description': 'Markdown list format'},
             ],
             'default_mask': 'default',
             'custom_range_pattern': '{start}-{end}'
@@ -64,12 +107,20 @@ class IPCIDRProcessor:
             print(f"Error saving configuration: {e}")
             return False
 
-    def add_mask(self, name: str, prefix: str, suffix: str, separator: str) -> bool:
+    def add_mask(self, name: str, prefix: str, suffix: str, separator: str,
+                 category: str = 'Custom', description: str = '') -> bool:
         """Add or update a mask in the configuration."""
         if not name:
             return False
-            
-        new_mask = {'name': name, 'prefix': prefix, 'suffix': suffix, 'separator': separator}
+
+        new_mask = {
+            'name': name,
+            'prefix': prefix,
+            'suffix': suffix,
+            'separator': separator,
+            'category': category,
+            'description': description
+        }
         for i, mask in enumerate(self.config['masks']):
             if mask['name'] == name:
                 self.config['masks'][i] = new_mask
@@ -108,8 +159,37 @@ class IPCIDRProcessor:
         for mask in self.config['masks']:
             if mask['name'] == name:
                 return mask
-        return next((m for m in self.config['masks'] if m['name'] == self.config['default_mask']), 
+        return next((m for m in self.config['masks'] if m['name'] == self.config['default_mask']),
                     self.config['masks'][0])
+
+    def get_mask_categories(self) -> List[str]:
+        """Get list of unique mask categories."""
+        categories = set()
+        for mask in self.config['masks']:
+            category = mask.get('category', 'Custom')
+            categories.add(category)
+        return sorted(list(categories))
+
+    def get_masks_by_category(self, category: str) -> List[Dict]:
+        """Get all masks in a specific category."""
+        return [mask for mask in self.config['masks'] if mask.get('category', 'Custom') == category]
+
+    def duplicate_mask(self, original_name: str, new_name: str) -> bool:
+        """Duplicate an existing mask with a new name."""
+        original = self.get_mask_by_name(original_name)
+        if not original or not new_name:
+            return False
+
+        new_mask = {
+            'name': new_name,
+            'prefix': original.get('prefix', ''),
+            'suffix': original.get('suffix', ''),
+            'separator': original.get('separator', '\n'),
+            'category': 'Custom',  # User duplicates go to Custom category
+            'description': f"Copy of {original_name}"
+        }
+        self.config['masks'].append(new_mask)
+        return self.save_config()
 
     def extract_ips(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> List[str]:
         """Extract IPv4 and/or IPv6 addresses and CIDR notations from text based on settings."""
@@ -1084,81 +1164,174 @@ class IPCIDRProcessorGUI:
         ttk.Button(self.tab_url, text="Process URLs", command=self.process_urls).pack(pady=10)
 
     def setup_masks_tab(self):
-        """Set up the mask settings tab."""
+        """Set up the mask settings tab with enhanced UI."""
+        # Top toolbar for filtering
+        toolbar_frame = ttk.Frame(self.tab_masks)
+        toolbar_frame.pack(fill='x', padx=10, pady=5)
+
+        ttk.Label(toolbar_frame, text="Filter by Category:").pack(side='left', padx=5)
+        self.mask_category_filter = tk.StringVar(value="All")
+        self.mask_category_combo = ttk.Combobox(toolbar_frame, textvariable=self.mask_category_filter, width=15, state='readonly')
+        self.mask_category_combo['values'] = ['All'] + self.processor.get_mask_categories()
+        self.mask_category_combo.pack(side='left', padx=5)
+        self.mask_category_combo.bind('<<ComboboxSelected>>', lambda e: self.update_mask_display(self.mask_frame))
+
+        ttk.Button(toolbar_frame, text="Refresh", command=lambda: self.update_mask_display(self.mask_frame)).pack(side='left', padx=5)
+
+        # Main masks display frame
         masks_frame = ttk.LabelFrame(self.tab_masks, text="Current Masks")
         masks_frame.pack(fill='both', expand=True, padx=10, pady=5)
-        
+
         canvas = tk.Canvas(masks_frame)
         scrollbar = ttk.Scrollbar(masks_frame, orient="vertical", command=canvas.yview)
         self.mask_frame = ttk.Frame(canvas)
-        
+
         self.mask_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=self.mask_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
+
         self.update_mask_display(self.mask_frame)
-        
-        new_mask_frame = ttk.LabelFrame(self.tab_masks, text="Add New Mask")
+
+        # New mask creation frame
+        new_mask_frame = ttk.LabelFrame(self.tab_masks, text="Create New Mask")
         new_mask_frame.pack(fill='x', padx=10, pady=5)
-        
+
+        # Row 0: Name
         ttk.Label(new_mask_frame, text="Name:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         self.new_mask_name = tk.StringVar()
-        ttk.Entry(new_mask_frame, textvariable=self.new_mask_name, width=20).grid(row=0, column=1, padx=5, pady=5, sticky='w')
-        
-        ttk.Label(new_mask_frame, text="Prefix:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_name, width=30).grid(row=0, column=1, padx=5, pady=5, sticky='w')
+
+        # Row 1: Category
+        ttk.Label(new_mask_frame, text="Category:").grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        self.new_mask_category = tk.StringVar(value="Custom")
+        category_combo = ttk.Combobox(new_mask_frame, textvariable=self.new_mask_category, width=28)
+        category_combo['values'] = self.processor.get_mask_categories() + ['Custom']
+        category_combo.grid(row=1, column=1, padx=5, pady=5, sticky='w')
+
+        # Row 2: Prefix
+        ttk.Label(new_mask_frame, text="Prefix:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
         self.new_mask_prefix = tk.StringVar()
-        ttk.Entry(new_mask_frame, textvariable=self.new_mask_prefix, width=20).grid(row=1, column=1, padx=5, pady=5, sticky='w')
-        
-        ttk.Label(new_mask_frame, text="Suffix:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_prefix, width=30).grid(row=2, column=1, padx=5, pady=5, sticky='w')
+
+        # Row 3: Suffix
+        ttk.Label(new_mask_frame, text="Suffix:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
         self.new_mask_suffix = tk.StringVar()
-        ttk.Entry(new_mask_frame, textvariable=self.new_mask_suffix, width=20).grid(row=2, column=1, padx=5, pady=5, sticky='w')
-        
-        ttk.Label(new_mask_frame, text="Separator:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_suffix, width=30).grid(row=3, column=1, padx=5, pady=5, sticky='w')
+
+        # Row 4: Separator
+        ttk.Label(new_mask_frame, text="Separator:").grid(row=4, column=0, padx=5, pady=5, sticky='w')
         self.new_mask_separator = tk.StringVar(value="\\n")
-        ttk.Entry(new_mask_frame, textvariable=self.new_mask_separator, width=20).grid(row=3, column=1, padx=5, pady=5, sticky='w')
-        
-        ttk.Label(new_mask_frame, text="Note: Use \\n for newline").grid(row=4, column=0, columnspan=2, padx=5, pady=5, sticky='w')
-        ttk.Button(new_mask_frame, text="Add Mask", command=self.add_new_mask).grid(row=5, column=0, columnspan=2, padx=5, pady=5)
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_separator, width=30).grid(row=4, column=1, padx=5, pady=5, sticky='w')
+
+        # Row 5: Description
+        ttk.Label(new_mask_frame, text="Description:").grid(row=5, column=0, padx=5, pady=5, sticky='w')
+        self.new_mask_description = tk.StringVar()
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_description, width=30).grid(row=5, column=1, padx=5, pady=5, sticky='w')
+
+        # Row 6: Preview
+        preview_frame = ttk.Frame(new_mask_frame)
+        preview_frame.grid(row=6, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
+
+        ttk.Button(preview_frame, text="Preview", command=self.preview_mask).pack(side='left', padx=2)
+        ttk.Button(preview_frame, text="Add Mask", command=self.add_new_mask).pack(side='left', padx=2)
+
+        # Row 7: Help text
+        help_text = "Note: Use \\n for newline, \\t for tab"
+        ttk.Label(new_mask_frame, text=help_text, font=('Arial', 8), foreground='gray').grid(row=7, column=0, columnspan=2, padx=5, pady=2, sticky='w')
 
     def update_mask_display(self, parent_frame):
-        """Update the display of masks in the settings tab."""
+        """Update the display of masks in the settings tab with category filtering."""
         # Clear existing widgets
         for widget in parent_frame.winfo_children():
             widget.destroy()
-            
-        # Add header
-        ttk.Label(parent_frame, text="Name", width=15).grid(row=0, column=0, padx=5, pady=5)
-        ttk.Label(parent_frame, text="Prefix", width=15).grid(row=0, column=1, padx=5, pady=5)
-        ttk.Label(parent_frame, text="Suffix", width=15).grid(row=0, column=2, padx=5, pady=5)
-        ttk.Label(parent_frame, text="Separator", width=15).grid(row=0, column=3, padx=5, pady=5)
-        ttk.Label(parent_frame, text="Actions", width=15).grid(row=0, column=4, padx=5, pady=5)
-        
-        # Add each mask
-        for i, mask in enumerate(self.processor.get_masks()):
-            ttk.Label(parent_frame, text=mask['name']).grid(row=i+1, column=0, padx=5, pady=5)
-            ttk.Label(parent_frame, text=mask['prefix']).grid(row=i+1, column=1, padx=5, pady=5)
-            ttk.Label(parent_frame, text=mask['suffix']).grid(row=i+1, column=2, padx=5, pady=5)
-            
-            # Display separator with special handling for newlines
-            separator_display = mask['separator'].replace('\n', '\\n')
-            ttk.Label(parent_frame, text=separator_display).grid(row=i+1, column=3, padx=5, pady=5)
-            
-            # Add edit and delete buttons
-            btn_frame = ttk.Frame(parent_frame)
-            btn_frame.grid(row=i+1, column=4, padx=5, pady=5)
-            
-            btn_edit = ttk.Button(btn_frame, text="Edit", 
-                                 command=lambda name=mask['name']: self.edit_mask(name))
-            btn_edit.pack(side='left', padx=2)
-            
-            btn_delete = ttk.Button(btn_frame, text="Delete", 
-                                   command=lambda name=mask['name']: self.delete_mask(name))
-            btn_delete.pack(side='left', padx=2)
-            if mask['name'] == 'default':
-                btn_delete['state'] = 'disabled'
-        
+
+        # Get filtered masks
+        selected_category = self.mask_category_filter.get() if hasattr(self, 'mask_category_filter') else 'All'
+        if selected_category == 'All':
+            masks_to_display = self.processor.get_masks()
+        else:
+            masks_to_display = self.processor.get_masks_by_category(selected_category)
+
+        # Group masks by category
+        masks_by_category = {}
+        for mask in masks_to_display:
+            category = mask.get('category', 'Custom')
+            if category not in masks_by_category:
+                masks_by_category[category] = []
+            masks_by_category[category].append(mask)
+
+        row_index = 0
+
+        # Display masks grouped by category
+        for category in sorted(masks_by_category.keys()):
+            # Category header
+            category_label = ttk.Label(parent_frame, text=f"📁 {category}", font=('Arial', 10, 'bold'), foreground='#2E86AB')
+            category_label.grid(row=row_index, column=0, columnspan=6, sticky='w', padx=5, pady=(10, 5))
+            row_index += 1
+
+            # Column headers
+            headers = ["Name", "Prefix", "Suffix", "Sep", "Description", "Actions"]
+            for col, header in enumerate(headers):
+                ttk.Label(parent_frame, text=header, font=('Arial', 9, 'bold')).grid(row=row_index, column=col, padx=5, pady=2)
+            row_index += 1
+
+            # Display masks in this category
+            for mask in masks_by_category[category]:
+                # Name
+                name_label = ttk.Label(parent_frame, text=mask['name'], foreground='#0066CC')
+                name_label.grid(row=row_index, column=0, padx=5, pady=2, sticky='w')
+
+                # Prefix (truncated)
+                prefix_display = mask.get('prefix', '')[:15]
+                if len(mask.get('prefix', '')) > 15:
+                    prefix_display += '...'
+                ttk.Label(parent_frame, text=prefix_display).grid(row=row_index, column=1, padx=5, pady=2, sticky='w')
+
+                # Suffix (truncated)
+                suffix_display = mask.get('suffix', '')[:15]
+                if len(mask.get('suffix', '')) > 15:
+                    suffix_display += '...'
+                ttk.Label(parent_frame, text=suffix_display).grid(row=row_index, column=2, padx=5, pady=2, sticky='w')
+
+                # Separator
+                separator_display = mask.get('separator', '\n').replace('\n', '\\n').replace('\t', '\\t')[:8]
+                ttk.Label(parent_frame, text=separator_display).grid(row=row_index, column=3, padx=5, pady=2, sticky='w')
+
+                # Description
+                description = mask.get('description', '')[:30]
+                if len(mask.get('description', '')) > 30:
+                    description += '...'
+                desc_label = ttk.Label(parent_frame, text=description, font=('Arial', 8), foreground='gray')
+                desc_label.grid(row=row_index, column=4, padx=5, pady=2, sticky='w')
+
+                # Actions
+                btn_frame = ttk.Frame(parent_frame)
+                btn_frame.grid(row=row_index, column=5, padx=5, pady=2)
+
+                btn_preview = ttk.Button(btn_frame, text="👁", width=3,
+                                        command=lambda m=mask: self.preview_existing_mask(m))
+                btn_preview.pack(side='left', padx=1)
+
+                btn_edit = ttk.Button(btn_frame, text="✎", width=3,
+                                     command=lambda name=mask['name']: self.edit_mask(name))
+                btn_edit.pack(side='left', padx=1)
+
+                btn_duplicate = ttk.Button(btn_frame, text="⎘", width=3,
+                                          command=lambda name=mask['name']: self.duplicate_mask_dialog(name))
+                btn_duplicate.pack(side='left', padx=1)
+
+                btn_delete = ttk.Button(btn_frame, text="🗑", width=3,
+                                       command=lambda name=mask['name']: self.delete_mask(name))
+                btn_delete.pack(side='left', padx=1)
+
+                # Disable delete for default mask
+                if mask['name'] == 'default':
+                    btn_delete['state'] = 'disabled'
+
+                row_index += 1
+
         # Update comboboxes in other tabs
         self.refresh_mask_comboboxes()
 
@@ -1794,51 +1967,71 @@ class IPCIDRProcessorGUI:
         name = self.new_mask_name.get().strip()
         prefix = self.new_mask_prefix.get()
         suffix = self.new_mask_suffix.get()
-        separator = self.new_mask_separator.get().replace('\\n', '\n')
-        
+        separator = self.new_mask_separator.get().replace('\\n', '\n').replace('\\t', '\t')
+        category = self.new_mask_category.get()
+        description = self.new_mask_description.get()
+
         if not name:
             messagebox.showwarning("Warning", "Mask name is required.")
             return
-        
-        if self.processor.add_mask(name, prefix, suffix, separator):
+
+        if self.processor.add_mask(name, prefix, suffix, separator, category, description):
             messagebox.showinfo("Success", f"Mask '{name}' added successfully.")
             self.update_mask_display(self.mask_frame)
             self.refresh_mask_comboboxes()
+            # Refresh category filter
+            if hasattr(self, 'mask_category_combo'):
+                self.mask_category_combo['values'] = ['All'] + self.processor.get_mask_categories()
+            # Clear form
             self.new_mask_name.set("")
             self.new_mask_prefix.set("")
             self.new_mask_suffix.set("")
             self.new_mask_separator.set("\\n")
+            self.new_mask_category.set("Custom")
+            self.new_mask_description.set("")
 
     def edit_mask(self, name):
         """Edit an existing mask."""
         mask = self.processor.get_mask_by_name(name)
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Edit Mask: {name}")
-        dialog.geometry("400x250")
-        
+        dialog.geometry("450x400")
+
         ttk.Label(dialog, text="Name:").grid(row=0, column=0, padx=10, pady=10, sticky='w')
         name_var = tk.StringVar(value=mask['name'])
         ttk.Entry(dialog, textvariable=name_var, width=30).grid(row=0, column=1, padx=10, pady=10, sticky='w')
-        
-        ttk.Label(dialog, text="Prefix:").grid(row=1, column=0, padx=10, pady=10, sticky='w')
-        prefix_var = tk.StringVar(value=mask['prefix'])
-        ttk.Entry(dialog, textvariable=prefix_var, width=30).grid(row=1, column=1, padx=10, pady=10, sticky='w')
-        
-        ttk.Label(dialog, text="Suffix:").grid(row=2, column=0, padx=10, pady=10, sticky='w')
-        suffix_var = tk.StringVar(value=mask['suffix'])
-        ttk.Entry(dialog, textvariable=suffix_var, width=30).grid(row=2, column=1, padx=10, pady=10, sticky='w')
-        
-        ttk.Label(dialog, text="Separator:").grid(row=3, column=0, padx=10, pady=10, sticky='w')
-        separator_var = tk.StringVar(value=mask['separator'].replace('\n', '\\n'))
-        ttk.Entry(dialog, textvariable=separator_var, width=30).grid(row=3, column=1, padx=10, pady=10, sticky='w')
-        
-        ttk.Label(dialog, text="Note: Use \\n for newline").grid(row=4, column=0, columnspan=2, padx=10, pady=5, sticky='w')
-        
+
+        ttk.Label(dialog, text="Category:").grid(row=1, column=0, padx=10, pady=10, sticky='w')
+        category_var = tk.StringVar(value=mask.get('category', 'Custom'))
+        category_combo = ttk.Combobox(dialog, textvariable=category_var, width=28)
+        category_combo['values'] = self.processor.get_mask_categories() + ['Custom']
+        category_combo.grid(row=1, column=1, padx=10, pady=10, sticky='w')
+
+        ttk.Label(dialog, text="Prefix:").grid(row=2, column=0, padx=10, pady=10, sticky='w')
+        prefix_var = tk.StringVar(value=mask.get('prefix', ''))
+        ttk.Entry(dialog, textvariable=prefix_var, width=30).grid(row=2, column=1, padx=10, pady=10, sticky='w')
+
+        ttk.Label(dialog, text="Suffix:").grid(row=3, column=0, padx=10, pady=10, sticky='w')
+        suffix_var = tk.StringVar(value=mask.get('suffix', ''))
+        ttk.Entry(dialog, textvariable=suffix_var, width=30).grid(row=3, column=1, padx=10, pady=10, sticky='w')
+
+        ttk.Label(dialog, text="Separator:").grid(row=4, column=0, padx=10, pady=10, sticky='w')
+        separator_var = tk.StringVar(value=mask.get('separator', '\n').replace('\n', '\\n').replace('\t', '\\t'))
+        ttk.Entry(dialog, textvariable=separator_var, width=30).grid(row=4, column=1, padx=10, pady=10, sticky='w')
+
+        ttk.Label(dialog, text="Description:").grid(row=5, column=0, padx=10, pady=10, sticky='w')
+        description_var = tk.StringVar(value=mask.get('description', ''))
+        ttk.Entry(dialog, textvariable=description_var, width=30).grid(row=5, column=1, padx=10, pady=10, sticky='w')
+
+        ttk.Label(dialog, text="Note: Use \\n for newline, \\t for tab").grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky='w')
+
         def save_changes():
             new_name = name_var.get().strip()
             new_prefix = prefix_var.get()
             new_suffix = suffix_var.get()
-            new_separator = separator_var.get().replace('\\n', '\n')
+            new_separator = separator_var.get().replace('\\n', '\n').replace('\\t', '\t')
+            new_category = category_var.get()
+            new_description = description_var.get()
             if not new_name:
                 messagebox.showwarning("Warning", "Mask name is required.")
                 return
@@ -1847,15 +2040,143 @@ class IPCIDRProcessorGUI:
                 return
             if new_name != name:
                 self.processor.remove_mask(name)
-            if self.processor.add_mask(new_name, new_prefix, new_suffix, new_separator):
+            if self.processor.add_mask(new_name, new_prefix, new_suffix, new_separator, new_category, new_description):
                 dialog.destroy()
                 self.update_mask_display(self.mask_frame)
                 self.refresh_mask_comboboxes()
-        
-        ttk.Button(dialog, text="Save Changes", command=save_changes).grid(row=5, column=0, columnspan=2, pady=15)
+                # Refresh category filter
+                if hasattr(self, 'mask_category_combo'):
+                    self.mask_category_combo['values'] = ['All'] + self.processor.get_mask_categories()
+
+        ttk.Button(dialog, text="Save Changes", command=save_changes).grid(row=7, column=0, columnspan=2, pady=15)
         dialog.transient(self.root)
         dialog.grab_set()
         self.root.wait_window(dialog)
+
+    def preview_mask(self):
+        """Preview the mask being created with sample IPs."""
+        prefix = self.new_mask_prefix.get()
+        suffix = self.new_mask_suffix.get()
+        separator = self.new_mask_separator.get().replace('\\n', '\n').replace('\\t', '\t')
+
+        # Sample IPs for preview
+        sample_ips = ['192.168.1.0/24', '10.0.0.0/8', '172.16.0.0/12']
+
+        # Apply mask
+        formatted = []
+        for ip in sample_ips:
+            formatted.append(f"{prefix}{ip}{suffix}")
+
+        result = separator.join(formatted)
+
+        # Show preview dialog
+        preview_dialog = tk.Toplevel(self.root)
+        preview_dialog.title("Mask Preview")
+        preview_dialog.geometry("500x300")
+
+        ttk.Label(preview_dialog, text="Preview with sample IPs:", font=('Arial', 10, 'bold')).pack(padx=10, pady=10, anchor='w')
+
+        # Text widget for preview
+        text_widget = tk.Text(preview_dialog, wrap='word', height=10, width=60)
+        text_widget.pack(padx=10, pady=5, fill='both', expand=True)
+        text_widget.insert('1.0', result)
+        text_widget.config(state='disabled')
+
+        # Copy button
+        def copy_preview():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(result)
+            messagebox.showinfo("Copied", "Preview copied to clipboard", parent=preview_dialog)
+
+        btn_frame = ttk.Frame(preview_dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="Copy", command=copy_preview).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Close", command=preview_dialog.destroy).pack(side='left', padx=5)
+
+        preview_dialog.transient(self.root)
+        preview_dialog.grab_set()
+
+    def preview_existing_mask(self, mask):
+        """Preview an existing mask with sample IPs."""
+        prefix = mask.get('prefix', '')
+        suffix = mask.get('suffix', '')
+        separator = mask.get('separator', '\n')
+        name = mask.get('name', 'Unknown')
+        description = mask.get('description', '')
+
+        # Sample IPs for preview
+        sample_ips = ['192.168.1.0/24', '10.0.0.0/8', '172.16.0.0/12']
+
+        # Apply mask
+        formatted = []
+        for ip in sample_ips:
+            formatted.append(f"{prefix}{ip}{suffix}")
+
+        result = separator.join(formatted)
+
+        # Show preview dialog
+        preview_dialog = tk.Toplevel(self.root)
+        preview_dialog.title(f"Preview: {name}")
+        preview_dialog.geometry("600x400")
+
+        # Info frame
+        info_frame = ttk.LabelFrame(preview_dialog, text="Mask Details")
+        info_frame.pack(padx=10, pady=5, fill='x')
+
+        ttk.Label(info_frame, text=f"Name: {name}", font=('Arial', 9, 'bold')).pack(padx=5, pady=2, anchor='w')
+        ttk.Label(info_frame, text=f"Category: {mask.get('category', 'Custom')}").pack(padx=5, pady=2, anchor='w')
+        if description:
+            ttk.Label(info_frame, text=f"Description: {description}", font=('Arial', 8), foreground='gray').pack(padx=5, pady=2, anchor='w')
+
+        ttk.Label(preview_dialog, text="Preview with sample IPs:", font=('Arial', 10, 'bold')).pack(padx=10, pady=5, anchor='w')
+
+        # Text widget for preview
+        text_widget = tk.Text(preview_dialog, wrap='word', height=12, width=70)
+        text_widget.pack(padx=10, pady=5, fill='both', expand=True)
+        text_widget.insert('1.0', result)
+        text_widget.config(state='disabled')
+
+        # Buttons
+        def copy_preview():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(result)
+            messagebox.showinfo("Copied", "Preview copied to clipboard", parent=preview_dialog)
+
+        btn_frame = ttk.Frame(preview_dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="Copy", command=copy_preview).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Edit", command=lambda: [preview_dialog.destroy(), self.edit_mask(name)]).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Close", command=preview_dialog.destroy).pack(side='left', padx=5)
+
+        preview_dialog.transient(self.root)
+        preview_dialog.grab_set()
+
+    def duplicate_mask_dialog(self, original_name):
+        """Show dialog to duplicate a mask with a new name."""
+        new_name = simpledialog.askstring(
+            "Duplicate Mask",
+            f"Enter a new name for the copy of '{original_name}':",
+            parent=self.root
+        )
+
+        if new_name:
+            new_name = new_name.strip()
+            if not new_name:
+                messagebox.showwarning("Warning", "Mask name cannot be empty.")
+                return
+
+            # Check if name already exists
+            if any(m['name'] == new_name for m in self.processor.get_masks()):
+                messagebox.showwarning("Warning", f"A mask with name '{new_name}' already exists.")
+                return
+
+            # Duplicate the mask
+            if self.processor.duplicate_mask(original_name, new_name):
+                messagebox.showinfo("Success", f"Mask '{original_name}' duplicated as '{new_name}'.")
+                self.update_mask_display(self.mask_frame)
+                self.refresh_mask_comboboxes()
+            else:
+                messagebox.showerror("Error", f"Failed to duplicate mask '{original_name}'.")
 
     def delete_mask(self, name):
         """Delete a mask from the configuration."""
