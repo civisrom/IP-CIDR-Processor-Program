@@ -1,5 +1,7 @@
 import os
 import re
+import copy
+import hashlib
 import yaml
 import signal
 import psutil
@@ -12,6 +14,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import requests
 from typing import List, Dict, Set, Union, Tuple, Optional
+from urllib.parse import urlparse
 
 # Try to import tkinterdnd2 for drag and drop support
 try:
@@ -89,13 +92,55 @@ class IPCIDRProcessor:
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r', encoding='utf-8') as f:
-                    self.config = yaml.safe_load(f)
+                    loaded_config = yaml.safe_load(f)
+                self.config = self._normalize_config(loaded_config)
             else:
-                self.config = self.default_config
+                self.config = copy.deepcopy(self.default_config)
                 self.save_config()
         except Exception as e:
             print(f"Error loading configuration: {e}")
-            self.config = self.default_config
+            self.config = copy.deepcopy(self.default_config)
+
+    def _normalize_config(self, config: Optional[Dict]) -> Dict:
+        """Validate and normalize a loaded configuration."""
+        if not isinstance(config, dict):
+            return copy.deepcopy(self.default_config)
+
+        normalized = copy.deepcopy(self.default_config)
+        masks = config.get('masks')
+        valid_masks = []
+        seen_names = set()
+
+        if isinstance(masks, list):
+            for mask in masks:
+                if not isinstance(mask, dict):
+                    continue
+                name = str(mask.get('name', '')).strip()
+                if not name or name in seen_names:
+                    continue
+                seen_names.add(name)
+                valid_masks.append({
+                    'name': name,
+                    'prefix': str(mask.get('prefix', '')),
+                    'suffix': str(mask.get('suffix', '')),
+                    'separator': str(mask.get('separator', '\n')),
+                    'category': str(mask.get('category', 'Custom')),
+                    'description': str(mask.get('description', ''))
+                })
+
+        if valid_masks:
+            normalized['masks'] = valid_masks
+
+        mask_names = {mask['name'] for mask in normalized['masks']}
+        default_mask = config.get('default_mask')
+        if isinstance(default_mask, str) and default_mask in mask_names:
+            normalized['default_mask'] = default_mask
+
+        custom_range_pattern = config.get('custom_range_pattern')
+        if isinstance(custom_range_pattern, str):
+            normalized['custom_range_pattern'] = custom_range_pattern
+
+        return normalized
 
     def save_config(self) -> bool:
         """Save current configuration to file."""
@@ -193,46 +238,92 @@ class IPCIDRProcessor:
 
     def extract_ips(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> List[str]:
         """Extract IPv4 and/or IPv6 addresses and CIDR notations from text based on settings."""
-        patterns = []
-        if include_ipv4:
-            ipv4_pattern = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:/\d{1,2})?\b'
-            patterns.append(ipv4_pattern)
-        
-        if include_ipv6:
-            ipv6_pattern = r'\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?:/\d{1,3})?\b|' \
-                           r'\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:/\d{1,3})?\b|' \
-                           r'\b(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}(?:/\d{1,3})?\b|' \
-                           r'\b(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}(?:/\d{1,3})?\b|' \
-                           r'\b(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}(?:/\d{1,3})?\b|' \
-                           r'\b(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}(?:/\d{1,3})?\b|' \
-                           r'\b(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}(?:/\d{1,3})?\b|' \
-                           r'\b[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}(?:/\d{1,3})?\b|' \
-                           r'\b:(?::[0-9a-fA-F]{1,4}){1,7}(?:/\d{1,3})?\b|' \
-                           r'\b::(?:/\d{1,3})?\b'
-            patterns.append(ipv6_pattern)
-        
-        if not patterns:
-            return []
-            
-        combined_pattern = '|'.join(patterns)
-        return re.findall(combined_pattern, text)
+        text_without_ranges = self._remove_range_spans(text, include_ipv4, include_ipv6)
+        return self._extract_valid_ip_tokens(text_without_ranges, include_ipv4, include_ipv6)
     
     def extract_ip_ranges(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> List[str]:
         """Extract IPv4 and/or IPv6 ranges from text based on settings."""
+        return [f"{start}-{end}" for start, end, _, _ in self._extract_ip_ranges_with_spans(text, include_ipv4, include_ipv6)]
+
+    def _extract_ip_ranges_with_spans(self, text: str, include_ipv4: bool = True,
+                                      include_ipv6: bool = True) -> List[Tuple[str, str, int, int]]:
+        """Extract valid IP ranges with text spans so endpoints are not double-counted."""
         ranges = []
-        if include_ipv4:
-            ipv4_range_pattern = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\s*-\s*(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
-            ipv4_ranges = re.findall(ipv4_range_pattern, text)
-            ranges.extend([re.sub(r'\s+', '', r) for r in ipv4_ranges])
-        
-        if include_ipv6:
-            ipv6_part = r'[0-9a-fA-F]{1,4}:(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}'
-            ipv6_range_pattern = rf'\b({ipv6_part})\s*-\s*({ipv6_part})\b'
-            ipv6_ranges = re.findall(ipv6_range_pattern, text)
-            for start_ip, end_ip in ipv6_ranges:
-                ranges.append(f"{start_ip}-{end_ip}")
-        
+        ip_token = r'[0-9A-Fa-f:.]+'
+        range_pattern = re.compile(
+            rf'(?<![0-9A-Fa-f:.])({ip_token})\s*-\s*({ip_token})(?![0-9A-Fa-f:.])'
+        )
+
+        for match in range_pattern.finditer(text):
+            start_ip = match.group(1).strip()
+            end_ip = match.group(2).strip()
+            try:
+                start = ipaddress.ip_address(start_ip)
+                end = ipaddress.ip_address(end_ip)
+            except ValueError:
+                continue
+
+            if start.version != end.version:
+                continue
+            if start.version == 4 and not include_ipv4:
+                continue
+            if start.version == 6 and not include_ipv6:
+                continue
+
+            ranges.append((str(start), str(end), match.start(), match.end()))
+
         return ranges
+
+    def _remove_range_spans(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> str:
+        """Replace IP range text with spaces before extracting standalone IPs."""
+        spans = self._extract_ip_ranges_with_spans(text, include_ipv4, include_ipv6)
+        if not spans:
+            return text
+
+        chars = list(text)
+        for _, _, start, end in spans:
+            chars[start:end] = ' ' * (end - start)
+        return ''.join(chars)
+
+    def _extract_valid_ip_tokens(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> List[str]:
+        """Extract syntactic candidates and keep only values accepted by ipaddress."""
+        if not include_ipv4 and not include_ipv6:
+            return []
+
+        results = []
+        seen = set()
+        token_pattern = re.compile(r'(?<![0-9A-Fa-f:.])([0-9A-Fa-f:.]+(?:/\d{1,3})?)(?![0-9A-Fa-f:.])')
+
+        for match in token_pattern.finditer(text):
+            token = match.group(1).strip()
+            if '.' not in token and ':' not in token:
+                continue
+            normalized = self._normalize_ip_token(token, include_ipv4, include_ipv6)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                results.append(normalized)
+
+        return results
+
+    def _normalize_ip_token(self, token: str, include_ipv4: bool = True, include_ipv6: bool = True) -> Optional[str]:
+        """Return a normalized IP/CIDR token, or None if it is invalid or filtered out."""
+        try:
+            if '/' in token:
+                network = ipaddress.ip_network(token, strict=False)
+                if network.version == 4 and not include_ipv4:
+                    return None
+                if network.version == 6 and not include_ipv6:
+                    return None
+                return str(network)
+
+            address = ipaddress.ip_address(token)
+            if address.version == 4 and not include_ipv4:
+                return None
+            if address.version == 6 and not include_ipv6:
+                return None
+            return str(address)
+        except ValueError:
+            return None
 
     def is_valid_ipv4(self, ip: str) -> bool:
         """Check if string is a valid IPv4 address."""
@@ -353,15 +444,7 @@ class IPCIDRProcessor:
                 # Sort networks by address and prefix length
                 ipv4_networks.sort(key=lambda n: (n.network_address, -n.prefixlen))
                 
-                # Optimization logic for IPv4
-                optimized_ipv4 = self._optimize_network_list(ipv4_networks, aggressive)
-                
-                # Collapse adjacent networks
-                try:
-                    collapsed_ipv4 = list(ipaddress.collapse_addresses(optimized_ipv4))
-                    optimized_ipv4 = collapsed_ipv4
-                except ValueError:
-                    pass  # Keep the first-pass results
+                optimized_ipv4 = list(ipaddress.collapse_addresses(ipv4_networks))
             
             # Process IPv6 networks
             optimized_ipv6 = []
@@ -369,15 +452,7 @@ class IPCIDRProcessor:
                 # Sort networks by address and prefix length
                 ipv6_networks.sort(key=lambda n: (n.network_address, -n.prefixlen))
                 
-                # Optimization logic for IPv6
-                optimized_ipv6 = self._optimize_network_list(ipv6_networks, aggressive)
-                
-                # Collapse adjacent networks
-                try:
-                    collapsed_ipv6 = list(ipaddress.collapse_addresses(optimized_ipv6))
-                    optimized_ipv6 = collapsed_ipv6
-                except ValueError:
-                    pass  # Keep the first-pass results
+                optimized_ipv6 = list(ipaddress.collapse_addresses(ipv6_networks))
             
             # Combine and return results
             return [str(net) for net in optimized_ipv4 + optimized_ipv6]
@@ -388,53 +463,7 @@ class IPCIDRProcessor:
     
     def _optimize_network_list(self, networks, aggressive: bool = False):
         """Helper method for optimize_cidr_list to handle the actual optimization logic."""
-        if not networks:
-            return []
-            
-        optimized = []
-        i = 0
-        while i < len(networks):
-            current = networks[i]
-            merged = False
-            
-            # Look for a potential supernet match
-            for j in range(len(optimized)):
-                if optimized[j].supernet_of(current):
-                    # Already covered by a supernet
-                    merged = True
-                    break
-                elif current.supernet_of(optimized[j]):
-                    # Current is a supernet of existing network
-                    optimized[j] = current
-                    merged = True
-                    break
-            
-            if not merged:
-                # Try to find adjacent networks that can be combined
-                if aggressive and i < len(networks) - 1:
-                    # Check if current and next can be combined by reducing prefix length
-                    current_prefix = current.prefixlen
-                    while current_prefix > 0:
-                        # Try combining with a shorter prefix
-                        current_prefix -= 1
-                        try:
-                            supernet = ipaddress.ip_network(
-                                f"{current.network_address}/{current_prefix}", strict=False
-                            )
-                            
-                            # Check if this supernet contains the next network
-                            if supernet.supernet_of(networks[i+1]):
-                                current = supernet
-                                i += 1  # Skip the next network as it's now included
-                                break
-                        except ValueError:
-                            continue
-                
-                optimized.append(current)
-            
-            i += 1
-        
-        return optimized
+        return list(ipaddress.collapse_addresses(networks)) if networks else []
 
     def apply_mask(self, ips: List[str], mask_name: str) -> str:
         """Apply a mask to format a list of IP addresses."""
@@ -454,14 +483,9 @@ class IPCIDRProcessor:
         all_ips = []
         for cidr in cidrs:
             try:
-                if '/' not in cidr:
-                    if ':' in cidr and include_ipv6:
-                        cidr = f"{cidr}/128"
-                    elif '.' in cidr and include_ipv4:
-                        cidr = f"{cidr}/32"
-                    else:
-                        continue
-                network = ipaddress.IPv4Network(cidr, strict=False) if '.' in cidr else ipaddress.IPv6Network(cidr, strict=False)
+                network = self._token_to_network(cidr, include_ipv4, include_ipv6)
+                if network is None:
+                    continue
                 all_ips.append(str(network))
             except ValueError:
                 continue
@@ -475,6 +499,24 @@ class IPCIDRProcessor:
                 continue
         
         return list(set(all_ips))
+
+    def _token_to_network(self, token: str, include_ipv4: bool = True, include_ipv6: bool = True):
+        """Convert an IP or CIDR token to a network using host masks for single IPs."""
+        try:
+            if '/' in token:
+                network = ipaddress.ip_network(token, strict=False)
+            else:
+                address = ipaddress.ip_address(token)
+                prefix = 32 if address.version == 4 else 128
+                network = ipaddress.ip_network(f"{address}/{prefix}", strict=False)
+
+            if network.version == 4 and not include_ipv4:
+                return None
+            if network.version == 6 and not include_ipv6:
+                return None
+            return network
+        except ValueError:
+            return None
 
     def download_file(self, url: str) -> str:
         """Download a file from a URL."""
@@ -524,7 +566,8 @@ class IPCIDRProcessor:
         
         # No signal handling here - it should be in the main thread
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() // 4) as executor:
+        max_workers = max(1, (os.cpu_count() or 1) // 4)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Создаем задачи для каждого файла
             futures = {
                 executor.submit(self.process_single_file, file, output_folder, mask_name, 
@@ -569,17 +612,14 @@ class IPCIDRProcessor:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 new_config = yaml.safe_load(f)
-                
-            # Validate configuration structure
+
             if not isinstance(new_config, dict):
                 return False
-                
-            required_keys = ['masks', 'default_mask']
-            if not all(key in new_config for key in required_keys):
+            if not isinstance(new_config.get('masks'), list):
                 return False
-                
+
             # Apply new configuration
-            self.config = new_config
+            self.config = self._normalize_config(new_config)
             self.save_config()
             return True
         except Exception as e:
@@ -599,20 +639,15 @@ class IPCIDRProcessor:
         
         try:
             file_name = os.path.basename(file_path)
+            unique_suffix = hashlib.md5(os.path.abspath(file_path).encode('utf-8')).hexdigest()[:8]
+            name, ext = os.path.splitext(file_name)
+            file_name = f"{name}_{unique_suffix}{ext}"
             output_file = os.path.join(output_folder, f"processed_{file_name}")
             
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
-            all_cidrs = self.extract_ips(content, include_ipv4, include_ipv6)
-            ranges = self.extract_ip_ranges(content, include_ipv4, include_ipv6)
-            for ip_range in ranges:
-                try:
-                    start_ip, end_ip = ip_range.split('-')
-                    cidrs_from_range = self.range_to_cidrs(start_ip, end_ip)
-                    all_cidrs.extend(cidrs_from_range)
-                except ValueError:
-                    continue
+            all_cidrs = self.process_input_to_ips(content, include_ipv4, include_ipv6)
             stats['total_ips_found'] = len(all_cidrs)
             
             unique_cidrs = list(set(all_cidrs))
@@ -982,8 +1017,14 @@ class IPCIDRProcessorGUI:
         else:
             self.file_count_var.set("")
 
-        # Schedule next update
-        self.root.after(500, lambda: self.update_status_bar(self.status_var.get()))
+        if not hasattr(self, '_status_update_scheduled'):
+            self._status_update_scheduled = True
+
+            def refresh_status_bar():
+                self._status_update_scheduled = False
+                self.update_status_bar(self.status_var.get())
+
+            self.root.after(500, refresh_status_bar)
 
     def validate_url(self, url: str) -> bool:
         """Validate if a string is a valid URL.
@@ -994,16 +1035,29 @@ class IPCIDRProcessorGUI:
         Returns:
             True if valid, False otherwise
         """
-        import re
-        # Simple URL validation regex
-        url_pattern = re.compile(
-            r'^https?://'  # http:// or https://
-            r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain...
-            r'localhost|'  # localhost...
-            r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
-            r'(?::\d+)?'  # optional port
-            r'(?:/?|[/?]\S+)$', re.IGNORECASE)
-        return url_pattern.match(url) is not None
+        try:
+            parsed = urlparse(url.strip())
+            if parsed.scheme not in ('http', 'https'):
+                return False
+            if not parsed.hostname:
+                return False
+            if parsed.port is not None and not (0 < parsed.port <= 65535):
+                return False
+            hostname = parsed.hostname
+            if ':' in hostname:
+                ipaddress.IPv6Address(hostname)
+            elif re.fullmatch(r'[\d.]+', hostname):
+                ipaddress.IPv4Address(hostname)
+            elif hostname != 'localhost':
+                labels = hostname.rstrip('.').split('.')
+                if not labels or any(
+                    not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label)
+                    for label in labels
+                ):
+                    return False
+            return True
+        except ValueError:
+            return False
 
     def setup_process_tab(self):
         """Set up the file processing tab."""
@@ -1635,7 +1689,7 @@ class IPCIDRProcessorGUI:
         """Reset configuration to default via GUI."""
         if messagebox.askyesno("Confirm Reset", 
                               "This will reset all settings to default. Continue?"):
-            self.processor.config = self.processor.default_config
+            self.processor.config = copy.deepcopy(self.processor.default_config)
             self.processor.save_config()
             messagebox.showinfo("Success", "Configuration reset to default")
             self.refresh_masks()
@@ -1672,21 +1726,7 @@ class IPCIDRProcessorGUI:
             try:
                 with open(file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                ips = self.processor.extract_ips(content, include_ipv4, include_ipv6)
-                ranges = self.processor.extract_ip_ranges(content, include_ipv4, include_ipv6)
-                for ip_range in ranges:
-                    start_ip, end_ip = ip_range.split('-')
-                    cidrs_from_range = self.processor.range_to_cidrs(start_ip, end_ip)
-                    all_cidrs.extend(cidrs_from_range)
-                for ip in ips:
-                    if '/' not in ip:
-                        if ':' in ip and include_ipv6:
-                            ip = f"{ip}/128"
-                        elif '.' in ip and include_ipv4:
-                            ip = f"{ip}/32"
-                        else:
-                            continue
-                    all_cidrs.append(ip)
+                all_cidrs.extend(self.processor.process_input_to_ips(content, include_ipv4, include_ipv6))
             except Exception as e:
                 messagebox.showerror("Error", f"Error processing file {file}: {e}")
                 return
@@ -1861,7 +1901,7 @@ class IPCIDRProcessorGUI:
             try:
                 with open(file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                cidrs = self.processor.extract_ips(content, include_ipv4, include_ipv6)
+                cidrs = self.processor.process_input_to_ips(content, include_ipv4, include_ipv6)
                 all_cidrs.extend(cidrs)
             except Exception as e:
                 messagebox.showerror("Error", f"Error processing file {file}: {e}")
@@ -1914,52 +1954,51 @@ class IPCIDRProcessorGUI:
             messagebox.showwarning("Warning", "No URLs added.")
             return
         
-        all_cidrs = []
-        for url in urls:
-            try:
-                content = self.processor.download_file(url)
-                if not content:
-                    continue
-                ips = self.processor.extract_ips(content, include_ipv4, include_ipv6)
-                ranges = self.processor.extract_ip_ranges(content, include_ipv4, include_ipv6)
-                for ip_range in ranges:
-                    start_ip, end_ip = ip_range.split('-')
-                    cidrs_from_range = self.processor.range_to_cidrs(start_ip, end_ip)
-                    all_cidrs.extend(cidrs_from_range)
-                for ip in ips:
-                    if '/' not in ip:
-                        if ':' in ip and include_ipv6:
-                            ip = f"{ip}/128"
-                        elif '.' in ip and include_ipv4:
-                            ip = f"{ip}/32"
-                        else:
-                            continue
-                    all_cidrs.append(ip)
-            except Exception as e:
-                messagebox.showerror("Error", f"Error processing URL {url}: {e}")
-                return
-        
-        unique_cidrs = list(set(all_cidrs))
-        if self.url_optimize_var.get():
-            optimized_cidrs = self.processor.optimize_cidr_list(unique_cidrs)
-            sorted_cidrs = self.processor.sort_ip_addresses(optimized_cidrs)
-        else:
-            sorted_cidrs = self.processor.sort_ip_addresses(unique_cidrs)
-        mask_name = self.url_mask_var.get()
-        formatted_content = self.processor.apply_mask(sorted_cidrs, mask_name)
-        
         output_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
-        if output_path:
+        if not output_path:
+            return
+
+        mask_name = self.url_mask_var.get()
+        should_optimize = self.url_optimize_var.get()
+        self.update_status_bar("Processing URLs...")
+
+        def process_urls_thread():
             try:
+                all_cidrs = []
+                errors = []
+                for url in urls:
+                    content = self.processor.download_file(url)
+                    if not content:
+                        errors.append(f"No content downloaded from {url}")
+                        continue
+                    all_cidrs.extend(self.processor.process_input_to_ips(content, include_ipv4, include_ipv6))
+
+                unique_cidrs = list(set(all_cidrs))
+                if should_optimize:
+                    optimized_cidrs = self.processor.optimize_cidr_list(unique_cidrs)
+                    sorted_cidrs = self.processor.sort_ip_addresses(optimized_cidrs)
+                else:
+                    sorted_cidrs = self.processor.sort_ip_addresses(unique_cidrs)
+
+                formatted_content = self.processor.apply_mask(sorted_cidrs, mask_name)
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write(formatted_content)
+
                 message = f"Processed {len(unique_cidrs)} IPs"
-                if self.url_optimize_var.get():
+                if should_optimize:
                     message += f" and optimized to {len(sorted_cidrs)} networks"
                 message += f".\nResults saved to: {output_path}"
-                messagebox.showinfo("Success", message)
+                if errors:
+                    message += f"\n\nWarnings:\n" + "\n".join(errors[:5])
+
+                self.root.after(0, lambda: self.update_status_bar("Ready"))
+                self.root.after(0, lambda msg=message: messagebox.showinfo("Success", msg))
             except Exception as e:
-                messagebox.showerror("Error", f"Error saving results: {e}")
+                error_message = str(e)
+                self.root.after(0, lambda: self.update_status_bar("Ready"))
+                self.root.after(0, lambda msg=error_message: messagebox.showerror("Error", f"Error processing URLs: {msg}"))
+
+        threading.Thread(target=process_urls_thread, daemon=True).start()
 
     # Mask Settings Tab Methods
     def add_new_mask(self):
