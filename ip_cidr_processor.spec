@@ -3,6 +3,7 @@ import sys
 import os
 from os.path import join, abspath
 import platform
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
@@ -18,12 +19,15 @@ if platform.system() == 'Windows':
 else:
     exe_name = f'ip_cidr_processor_{os_name}'
 
+tkinterdnd2_datas = collect_data_files('tkinterdnd2')
+tkinterdnd2_hiddenimports = collect_submodules('tkinterdnd2')
+
 a = Analysis(
     [join(root_dir, 'src', 'ip_cidr_processor.py')],
     pathex=[root_dir],
     binaries=[],
-    datas=[],
-    hiddenimports=['yaml', 'requests', 'psutil'],
+    datas=tkinterdnd2_datas,
+    hiddenimports=['yaml', 'requests', 'psutil', 'tkinterdnd2'] + tkinterdnd2_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
