@@ -48,7 +48,7 @@ sys.modules.setdefault('tkinter.simpledialog', simpledialog)
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(ROOT, 'src'))
 
-from ip_cidr_processor import IPCIDRProcessor, IPCIDRProcessorGUI
+from ip_cidr_processor import IPCIDRProcessor, IPCIDRProcessorGUI, run_cli
 
 
 class FakeTk:
@@ -104,6 +104,11 @@ class IPCIDRProcessorTests(unittest.TestCase):
         text = 'source=http://192.168.1.1:8080/list.txt backup=https://10.0.0.5/path'
         self.assertEqual(self.processor.extract_ips(text), ['192.168.1.1', '10.0.0.5'])
 
+    def test_strict_mode_requires_standalone_tokens(self):
+        text = 'field=8.8.8.8 standalone 1.1.1.1 "9.9.9.9",'
+        self.assertEqual(self.processor.extract_ips(text, extraction_mode='smart'), ['8.8.8.8', '1.1.1.1', '9.9.9.9'])
+        self.assertEqual(self.processor.extract_ips(text, extraction_mode='strict'), ['1.1.1.1', '9.9.9.9'])
+
     def test_ipv4_mapped_ipv6_is_not_double_counted(self):
         self.assertEqual(self.processor.extract_ips('allow ::ffff:192.0.2.128'), ['::ffff:c000:280'])
 
@@ -124,6 +129,23 @@ class IPCIDRProcessorTests(unittest.TestCase):
             '::1/128',
         })
 
+    def test_popular_rule_formats_are_imported(self):
+        text = (
+            'IP-CIDR,1.2.3.0/24,no-resolve\n'
+            'iptables -A INPUT -s 4.4.4.4 -j DROP\n'
+            'ufw deny from 5.5.5.0/24\n'
+            '/ip firewall address-list add list=blocked address=6.6.6.6\n'
+            '["7.7.7.7", "2001:db8::/127"]'
+        )
+        self.assertEqual(set(self.processor.process_input_to_ips(text)), {
+            '1.2.3.0/24',
+            '4.4.4.4/32',
+            '5.5.5.0/24',
+            '6.6.6.6/32',
+            '7.7.7.7/32',
+            '2001:db8::/127',
+        })
+
     def test_range_endpoints_are_not_counted_twice(self):
         result = sorted(self.processor.process_input_to_ips('192.168.1.1 - 192.168.1.3'))
         self.assertEqual(result, ['192.168.1.1/32', '192.168.1.2/31'])
@@ -136,6 +158,17 @@ class IPCIDRProcessorTests(unittest.TestCase):
         result = self.processor.optimize_cidr_list(['10.0.0.0/25', '10.0.1.0/25'], aggressive=True)
         self.assertEqual(result, ['10.0.0.0/25', '10.0.1.0/25'])
 
+    def test_lossy_aggressive_optimization_respects_extra_limit(self):
+        cidrs = ['10.0.0.0/25', '10.0.1.0/25']
+        self.assertEqual(
+            self.processor.optimize_cidr_list(cidrs, aggressive=True, allow_expansion=True, max_extra_addresses=255),
+            cidrs,
+        )
+        self.assertEqual(
+            self.processor.optimize_cidr_list(cidrs, aggressive=True, allow_expansion=True, max_extra_addresses=256),
+            ['10.0.0.0/23'],
+        )
+
     def test_adjacent_networks_still_collapse(self):
         result = self.processor.optimize_cidr_list(['10.0.0.0/25', '10.0.0.128/25'], aggressive=True)
         self.assertEqual(result, ['10.0.0.0/24'])
@@ -145,6 +178,31 @@ class IPCIDRProcessorTests(unittest.TestCase):
         expected = ['10.0.0.0/24', '10.0.2.0/25', '2001:db8::/126']
         self.assertEqual(self.processor.optimize_cidr_list(cidrs, aggressive=False), expected)
         self.assertEqual(self.processor.optimize_cidr_list(cidrs, aggressive=True), expected)
+
+    def test_filters_keep_public_networks(self):
+        result = self.processor.process_input_to_ips(
+            '8.8.8.8 10.0.0.1 127.0.0.1 224.0.0.1',
+            filters={'public_only': True}
+        )
+        self.assertEqual(result, ['8.8.8.8/32'])
+
+    def test_processing_report_includes_suspicious_values_and_stats(self):
+        report = self.processor.build_processing_report(
+            '8.8.8.8 999.1.1.1 192.168.1.1/99 10.0.0.1',
+            filters={'exclude_private': True},
+            optimize=True,
+        )
+        self.assertEqual(report['final_cidrs'], ['8.8.8.8/32'])
+        self.assertEqual(report['stats']['filtered_out'], 1)
+        self.assertGreaterEqual(report['stats']['suspicious_count'], 2)
+
+    def test_subtract_cidr_lists_removes_allowlist_coverage(self):
+        result = self.processor.subtract_cidr_lists(['10.0.0.0/24'], ['10.0.0.0/25'])
+        self.assertEqual(result, ['10.0.0.128/25'])
+
+    def test_self_test_passes(self):
+        ok, lines = self.processor.run_self_test()
+        self.assertTrue(ok, '\n'.join(lines))
 
     def test_url_validation_uses_real_host_parsing(self):
         gui = object.__new__(IPCIDRProcessorGUI)
@@ -185,6 +243,23 @@ class IPCIDRProcessorTests(unittest.TestCase):
         )), listbox, 'urls')
 
         self.assertEqual(listbox.items, ['https://example.com/list.txt'])
+
+    def test_cli_filters_optimizes_and_writes_output(self):
+        input_path = os.path.join(self.temp_dir.name, 'input.txt')
+        output_path = os.path.join(self.temp_dir.name, 'output.txt')
+        with open(input_path, 'w', encoding='utf-8') as handle:
+            handle.write('8.8.8.8 10.0.0.1 1.1.1.0/25 1.1.1.128/25')
+
+        exit_code = run_cli([
+            input_path,
+            '--public-only',
+            '--optimize',
+            '--output', output_path,
+        ])
+
+        self.assertEqual(exit_code, 0)
+        with open(output_path, 'r', encoding='utf-8') as handle:
+            self.assertEqual(handle.read().splitlines(), ['1.1.1.0/24', '8.8.8.8/32'])
 
 
 if __name__ == '__main__':

@@ -11,20 +11,25 @@ GUI-программа для извлечения IP-адресов из тек
 - Конвертирует диапазоны IP в минимальный набор CIDR.
 - Оптимизирует CIDR-списки без расширения покрытия адресов.
 - Поддерживает обычный и aggressive режим оптимизации.
+- Может агрессивно объединять сети с контролем количества дополнительных адресов.
 - Работает с IPv4 и IPv6 вместе или по отдельности.
+- Фильтрует private, loopback, link-local, multicast, reserved, unspecified или оставляет только public IP.
 - Форматирует результат через маски: plain list, Clash, Surge, Quantumult X, iptables, UFW, MikroTik, JSON, CSV и другие.
 - Обрабатывает локальные файлы, URL-списки и большие наборы файлов в batch-режиме.
 - Поддерживает drag-and-drop файлов, папок и URL.
+- Показывает preview, статистику и отчет о подозрительных значениях перед сохранением.
+- Вычитает allowlist из denylist.
+- Имеет встроенный self-test и CLI-режим.
 
 ## Установка
 
-Требуется Python 3.7+.
+Требуется Python 3.7+. Для GUI нужен системный `tkinter` (`python3-tk` в Debian/Ubuntu).
 
 ```bash
 pip install -r requirements.txt
 ```
 
-`tkinterdnd2` нужен для drag-and-drop. Без него программа запускается, но файлы нужно добавлять кнопкой.
+`tkinterdnd2` нужен для drag-and-drop. Без него GUI запускается, но файлы нужно добавлять кнопкой. CLI может работать без `tkinter`.
 
 ## Запуск
 
@@ -45,8 +50,11 @@ python src/ip_cidr_processor.py
 - **Optimize CIDR** - удаление дублей, объединение соседних сетей, сортировка результата.
 - **URL Processing** - загрузка списков по HTTP/HTTPS и обработка найденных IP.
 - **Batch Processing** - обработка многих файлов с прогрессом и возможностью остановки.
+- **Compare Lists** - вычитание allowlist из denylist с preview результата.
 - **Mask Settings** - выбор, создание, копирование и настройка масок вывода.
-- **Configuration** - импорт, экспорт и сброс настроек.
+- **Configuration** - импорт, экспорт, сброс настроек и self-test.
+
+В основных режимах доступны `smart` и `strict` извлечение, фильтры типов адресов, безопасная оптимизация и контролируемое aggressive-объединение.
 
 ## Drag-and-drop
 
@@ -74,6 +82,20 @@ python src/ip_cidr_processor.py
 При первом запуске создается `ip_cidr_config.yaml`. В нем хранятся маски, выбранная маска по умолчанию и пользовательские настройки.
 
 Подробное описание всех шаблонов масок находится в [MASK_TEMPLATES.md](MASK_TEMPLATES.md).
+
+## CLI
+
+Если передать входные файлы, программа работает без GUI:
+
+```bash
+python3 src/ip_cidr_processor.py input.txt --public-only --optimize --mask clash -o output.txt
+```
+
+Полный список опций:
+
+```bash
+python3 src/ip_cidr_processor.py --help
+```
 
 ## Сборка exe
 

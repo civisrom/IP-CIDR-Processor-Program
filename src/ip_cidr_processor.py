@@ -1,20 +1,45 @@
+import argparse
 import os
 import re
 import copy
 import hashlib
 import yaml
 import signal
-import psutil
+import sys
 import atexit
 import multiprocessing
 import concurrent.futures
 import threading
 import ipaddress
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
 import requests
 from typing import List, Dict, Set, Union, Tuple, Optional
 from urllib.parse import urlparse
+
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox, simpledialog
+    TKINTER_AVAILABLE = True
+except ImportError:
+    TKINTER_AVAILABLE = False
+
+    class _TkFallback:
+        END = 'end'
+
+        def __getattr__(self, name):
+            return object
+
+    tk = _TkFallback()
+    ttk = _TkFallback()
+    filedialog = _TkFallback()
+    messagebox = _TkFallback()
+    simpledialog = _TkFallback()
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    psutil = None
+    PSUTIL_AVAILABLE = False
 
 # Try to import tkinterdnd2 for drag and drop support
 try:
@@ -30,6 +55,16 @@ except ImportError:
 
 
 SUPPORTED_DROP_EXTENSIONS = ('.txt', '.log', '.dat', '.csv')
+EXTRACTION_MODES = ('smart', 'strict')
+FILTER_DEFAULTS = {
+    'public_only': False,
+    'exclude_private': False,
+    'exclude_loopback': False,
+    'exclude_link_local': False,
+    'exclude_multicast': False,
+    'exclude_reserved': False,
+    'exclude_unspecified': False,
+}
 
 
 class IPCIDRProcessor:
@@ -244,9 +279,12 @@ class IPCIDRProcessor:
         self.config['masks'].append(new_mask)
         return self.save_config()
 
-    def extract_ips(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> List[str]:
+    def extract_ips(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True,
+                    extraction_mode: str = 'smart') -> List[str]:
         """Extract IPv4 and/or IPv6 addresses and CIDR notations from text based on settings."""
         text_without_ranges = self._remove_range_spans(text, include_ipv4, include_ipv6)
+        if extraction_mode == 'strict':
+            return self._extract_strict_valid_ip_tokens(text_without_ranges, include_ipv4, include_ipv6)
         return self._extract_valid_ip_tokens(text_without_ranges, include_ipv4, include_ipv6)
     
     def extract_ip_ranges(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> List[str]:
@@ -336,6 +374,26 @@ class IPCIDRProcessor:
 
         return results
 
+    def _extract_strict_valid_ip_tokens(self, text: str, include_ipv4: bool = True,
+                                        include_ipv6: bool = True) -> List[str]:
+        """Extract only standalone IP/CIDR tokens after trimming common list syntax."""
+        if not include_ipv4 and not include_ipv6:
+            return []
+
+        results = []
+        seen = set()
+        separators = re.compile(r'[\s,;]+')
+        wrappers = '"\'[](){}<>'
+        for raw_token in separators.split(text):
+            token = raw_token.strip(wrappers)
+            if not token:
+                continue
+            normalized = self._normalize_ip_token(token, include_ipv4, include_ipv6)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                results.append(normalized)
+        return results
+
     def _normalize_ip_token(self, token: str, include_ipv4: bool = True, include_ipv6: bool = True) -> Optional[str]:
         """Return a normalized IP/CIDR token, or None if it is invalid or filtered out."""
         try:
@@ -355,6 +413,105 @@ class IPCIDRProcessor:
             return str(address)
         except ValueError:
             return None
+
+    def get_suspicious_tokens(self, text: str, include_ipv4: bool = True,
+                              include_ipv6: bool = True) -> List[Dict[str, str]]:
+        """Find values that look like IP/CIDR/range data but fail validation."""
+        suspicious = []
+        seen = set()
+
+        def add(value: str, reason: str) -> None:
+            key = (value, reason)
+            if value and key not in seen:
+                seen.add(key)
+                suspicious.append({'value': value, 'reason': reason})
+
+        if include_ipv4:
+            ipv4_like = re.compile(r'(?<![A-Za-z0-9_.-])(\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,3})?)(?![A-Za-z0-9_.-])')
+            for match in ipv4_like.finditer(text):
+                token = match.group(1)
+                if self._normalize_ip_token(token, include_ipv4=True, include_ipv6=False) is None:
+                    add(token, 'Invalid IPv4 or IPv4 CIDR')
+
+        if include_ipv6:
+            ipv6_like = re.compile(r'(?<![A-Za-z0-9:.])([0-9A-Fa-f:.]*:[0-9A-Fa-f:.]+/\d{1,3})(?![A-Za-z0-9:.])')
+            for match in ipv6_like.finditer(text):
+                token = match.group(1)
+                if self._normalize_ip_token(token, include_ipv4=False, include_ipv6=True) is None:
+                    add(token, 'Invalid IPv6 CIDR')
+
+        range_like = re.compile(r'(?<![0-9A-Fa-f:.])([0-9A-Fa-f:.]+)\s*-\s*([0-9A-Fa-f:.]+)(?![0-9A-Fa-f:.])')
+        for match in range_like.finditer(text):
+            start_token, end_token = match.group(1), match.group(2)
+            try:
+                start = ipaddress.ip_address(start_token)
+                end = ipaddress.ip_address(end_token)
+            except ValueError:
+                add(match.group(0), 'Invalid IP range endpoint')
+                continue
+            if start.version != end.version:
+                add(match.group(0), 'Mixed IPv4/IPv6 range')
+
+        return suspicious
+
+    def _parse_networks(self, cidr_list: List[str]) -> List[Union[ipaddress.IPv4Network, ipaddress.IPv6Network]]:
+        """Parse valid IPv4/IPv6 networks from strings."""
+        networks = []
+        for cidr in cidr_list:
+            try:
+                networks.append(ipaddress.ip_network(cidr, strict=False))
+            except ValueError:
+                continue
+        return networks
+
+    def _normalize_filter_options(self, filters: Optional[Dict[str, bool]]) -> Dict[str, bool]:
+        """Merge filter options with defaults."""
+        normalized = dict(FILTER_DEFAULTS)
+        if isinstance(filters, dict):
+            for key in normalized:
+                normalized[key] = bool(filters.get(key, normalized[key]))
+        return normalized
+
+    def _network_matches_filters(self, network, filters: Dict[str, bool]) -> bool:
+        """Return True when a network should be removed by active filters."""
+        if filters['public_only']:
+            return (
+                not network.is_global or network.is_private or network.is_loopback or
+                network.is_link_local or network.is_multicast or network.is_reserved or
+                network.is_unspecified
+            )
+        if filters['exclude_private'] and network.is_private:
+            return True
+        if filters['exclude_loopback'] and network.is_loopback:
+            return True
+        if filters['exclude_link_local'] and network.is_link_local:
+            return True
+        if filters['exclude_multicast'] and network.is_multicast:
+            return True
+        if filters['exclude_reserved'] and network.is_reserved:
+            return True
+        if filters['exclude_unspecified'] and network.is_unspecified:
+            return True
+        return False
+
+    def filter_cidr_list(self, cidr_list: List[str], filters: Optional[Dict[str, bool]] = None) -> List[str]:
+        """Filter CIDR entries by address class without changing network coverage."""
+        normalized_filters = self._normalize_filter_options(filters)
+        filtered = []
+        for network in self._parse_networks(cidr_list):
+            if not self._network_matches_filters(network, normalized_filters):
+                filtered.append(str(network))
+        return self.sort_ip_addresses(filtered)
+
+    def cidr_total_addresses(self, cidr_list: List[str]) -> int:
+        """Count addresses covered by a CIDR list after exact collapse."""
+        networks = self._parse_networks(cidr_list)
+        if not networks:
+            return 0
+        ipv4 = [network for network in networks if network.version == 4]
+        ipv6 = [network for network in networks if network.version == 6]
+        collapsed = list(ipaddress.collapse_addresses(ipv4)) + list(ipaddress.collapse_addresses(ipv6))
+        return sum(network.num_addresses for network in collapsed)
 
     def is_valid_ipv4(self, ip: str) -> bool:
         """Check if string is a valid IPv4 address."""
@@ -445,7 +602,8 @@ class IPCIDRProcessor:
             print(f"Error converting CIDR to range: {e}")
             return ("", "")
 
-    def optimize_cidr_list(self, cidr_list: List[str], aggressive: bool = False) -> List[str]:
+    def optimize_cidr_list(self, cidr_list: List[str], aggressive: bool = False,
+                           allow_expansion: bool = False, max_extra_addresses: int = 0) -> List[str]:
         """
         Optimize a list of CIDR notations by combining adjacent networks.
         Works with both IPv4 and IPv6.
@@ -476,6 +634,8 @@ class IPCIDRProcessor:
                 ipv4_networks.sort(key=lambda n: (n.network_address, -n.prefixlen))
                 
                 optimized_ipv4 = list(ipaddress.collapse_addresses(ipv4_networks))
+                if aggressive and allow_expansion and max_extra_addresses > 0:
+                    optimized_ipv4 = self._lossy_expand_networks(optimized_ipv4, max_extra_addresses)
             
             # Process IPv6 networks
             optimized_ipv6 = []
@@ -484,6 +644,8 @@ class IPCIDRProcessor:
                 ipv6_networks.sort(key=lambda n: (n.network_address, -n.prefixlen))
                 
                 optimized_ipv6 = list(ipaddress.collapse_addresses(ipv6_networks))
+                if aggressive and allow_expansion and max_extra_addresses > 0:
+                    optimized_ipv6 = self._lossy_expand_networks(optimized_ipv6, max_extra_addresses)
             
             # Combine and return results
             return [str(net) for net in optimized_ipv4 + optimized_ipv6]
@@ -496,6 +658,51 @@ class IPCIDRProcessor:
         """Helper method for optimize_cidr_list to handle the actual optimization logic."""
         return list(ipaddress.collapse_addresses(networks)) if networks else []
 
+    def _smallest_common_supernet(self, first, second):
+        """Return the smallest supernet covering two same-version networks."""
+        if first.version != second.version:
+            return None
+        max_prefix = first.max_prefixlen
+        first_address = int(first.network_address)
+        last_address = int(max(first.broadcast_address, second.broadcast_address))
+        min_address = int(min(first.network_address, second.network_address))
+        differing_bits = min_address ^ last_address
+        prefixlen = max_prefix - differing_bits.bit_length()
+        network_int = min_address & (((1 << max_prefix) - 1) ^ ((1 << (max_prefix - prefixlen)) - 1))
+        return ipaddress.ip_network((network_int, prefixlen))
+
+    def _lossy_expand_networks(self, networks, max_extra_addresses: int):
+        """Merge nearby networks when the added address count stays within a limit."""
+        current = list(ipaddress.collapse_addresses(networks))
+        changed = True
+        while changed:
+            changed = False
+            current.sort(key=lambda n: (int(n.network_address), n.prefixlen))
+            for i, first in enumerate(current):
+                best = None
+                for second in current[i + 1:]:
+                    if first.version != second.version:
+                        continue
+                    common = self._smallest_common_supernet(first, second)
+                    if common is None:
+                        continue
+                    group = [network for network in current if network.subnet_of(common)]
+                    if len(group) < 2:
+                        continue
+                    covered = self.cidr_total_addresses([str(network) for network in group])
+                    extra = common.num_addresses - covered
+                    if 0 <= extra <= max_extra_addresses:
+                        best = (common, group)
+                        break
+                if best:
+                    common, group = best
+                    current = [network for network in current if network not in group]
+                    current.append(common)
+                    current = list(ipaddress.collapse_addresses(current))
+                    changed = True
+                    break
+        return current
+
     def apply_mask(self, ips: List[str], mask_name: str) -> str:
         """Apply a mask to format a list of IP addresses."""
         mask = self.get_mask_by_name(mask_name)
@@ -506,9 +713,11 @@ class IPCIDRProcessor:
             
         return mask['separator'].join(formatted_ips)
 
-    def process_input_to_ips(self, input_text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> List[str]:
+    def process_input_to_ips(self, input_text: str, include_ipv4: bool = True, include_ipv6: bool = True,
+                             extraction_mode: str = 'smart',
+                             filters: Optional[Dict[str, bool]] = None) -> List[str]:
         """Process input text to extract IPs, CIDR notations, and ranges."""
-        cidrs = self.extract_ips(input_text, include_ipv4, include_ipv6)
+        cidrs = self.extract_ips(input_text, include_ipv4, include_ipv6, extraction_mode)
         ranges = self.extract_ip_ranges(input_text, include_ipv4, include_ipv6)
         
         all_ips = []
@@ -529,7 +738,148 @@ class IPCIDRProcessor:
             except ValueError:
                 continue
         
-        return list(set(all_ips))
+        result = list(set(all_ips))
+        if filters:
+            return self.filter_cidr_list(result, filters)
+        return result
+
+    def build_processing_report(self, input_text: str, include_ipv4: bool = True, include_ipv6: bool = True,
+                                extraction_mode: str = 'smart', filters: Optional[Dict[str, bool]] = None,
+                                optimize: bool = False, aggressive: bool = False,
+                                allow_expansion: bool = False, max_extra_addresses: int = 0) -> Dict:
+        """Extract, filter, optionally optimize, and return output plus stats."""
+        extraction_mode = extraction_mode if extraction_mode in EXTRACTION_MODES else 'smart'
+        cidrs = self.extract_ips(input_text, include_ipv4, include_ipv6, extraction_mode)
+        ranges = self.extract_ip_ranges(input_text, include_ipv4, include_ipv6)
+        extracted = []
+
+        for cidr in cidrs:
+            network = self._token_to_network(cidr, include_ipv4, include_ipv6)
+            if network is not None:
+                extracted.append(str(network))
+
+        for ip_range in ranges:
+            try:
+                start_ip, end_ip = ip_range.split('-')
+                extracted.extend(self.range_to_cidrs(start_ip, end_ip))
+            except ValueError:
+                continue
+
+        unique_cidrs = self.sort_ip_addresses(list(set(extracted)))
+        filtered_cidrs = self.filter_cidr_list(unique_cidrs, filters)
+        if optimize:
+            final_cidrs = self.optimize_cidr_list(
+                filtered_cidrs,
+                aggressive=aggressive,
+                allow_expansion=allow_expansion,
+                max_extra_addresses=max_extra_addresses,
+            )
+            final_cidrs = self.sort_ip_addresses(final_cidrs)
+        else:
+            final_cidrs = filtered_cidrs
+
+        safe_total = self.cidr_total_addresses(self.optimize_cidr_list(filtered_cidrs))
+        final_total = self.cidr_total_addresses(final_cidrs)
+        suspicious = self.get_suspicious_tokens(input_text, include_ipv4, include_ipv6)
+        return {
+            'raw_entries': extracted,
+            'unique_cidrs': unique_cidrs,
+            'filtered_cidrs': filtered_cidrs,
+            'final_cidrs': final_cidrs,
+            'suspicious': suspicious,
+            'stats': {
+                'lines': len(input_text.splitlines()) if input_text else 0,
+                'found_entries': len(extracted),
+                'ranges_found': len(ranges),
+                'unique_networks': len(unique_cidrs),
+                'filtered_out': len(unique_cidrs) - len(filtered_cidrs),
+                'after_filter': len(filtered_cidrs),
+                'final_networks': len(final_cidrs),
+                'addresses_covered': final_total,
+                'extra_addresses': max(0, final_total - safe_total),
+                'suspicious_count': len(suspicious),
+            }
+        }
+
+    def format_processing_report(self, report: Dict) -> str:
+        """Format processing stats and suspicious tokens for preview/report dialogs."""
+        stats = report.get('stats', {})
+        lines = [
+            f"Lines: {stats.get('lines', 0)}",
+            f"Found entries: {stats.get('found_entries', 0)}",
+            f"Unique networks: {stats.get('unique_networks', 0)}",
+            f"Filtered out: {stats.get('filtered_out', 0)}",
+            f"Final networks: {stats.get('final_networks', 0)}",
+            f"Addresses covered: {stats.get('addresses_covered', 0)}",
+        ]
+        extra = stats.get('extra_addresses', 0)
+        if extra:
+            lines.append(f"Extra addresses from aggressive merge: {extra}")
+        suspicious = report.get('suspicious', [])
+        if suspicious:
+            lines.append("")
+            lines.append("Suspicious skipped values:")
+            for item in suspicious[:100]:
+                lines.append(f"- {item['value']}: {item['reason']}")
+            if len(suspicious) > 100:
+                lines.append(f"...and {len(suspicious) - 100} more")
+        return '\n'.join(lines)
+
+    def subtract_cidr_lists(self, denylist: List[str], allowlist: List[str]) -> List[str]:
+        """Subtract allowlist networks from a denylist while preserving exact coverage."""
+        deny_networks = self._parse_networks(denylist)
+        allow_networks = self._parse_networks(allowlist)
+        remaining = []
+
+        for base in deny_networks:
+            pieces = [base]
+            for allowed in allow_networks:
+                if allowed.version != base.version:
+                    continue
+                next_pieces = []
+                for piece in pieces:
+                    if not piece.overlaps(allowed):
+                        next_pieces.append(piece)
+                    elif piece.subnet_of(allowed):
+                        continue
+                    elif allowed.subnet_of(piece):
+                        next_pieces.extend(piece.address_exclude(allowed))
+                    else:
+                        next_pieces.append(piece)
+                pieces = next_pieces
+                if not pieces:
+                    break
+            remaining.extend(pieces)
+
+        ipv4 = [network for network in remaining if network.version == 4]
+        ipv6 = [network for network in remaining if network.version == 6]
+        collapsed = list(ipaddress.collapse_addresses(ipv4)) + list(ipaddress.collapse_addresses(ipv6))
+        return self.sort_ip_addresses([str(network) for network in collapsed])
+
+    def run_self_test(self) -> Tuple[bool, List[str]]:
+        """Run a compact built-in validation suite used by the GUI self-test."""
+        checks = []
+
+        def check(name: str, actual, expected) -> None:
+            checks.append((name, actual == expected, actual, expected))
+
+        check('IPv4 URL with port', self.extract_ips('http://192.168.1.1:8080'), ['192.168.1.1'])
+        check('IPv6 compressed', self.extract_ips('2001:db8::1 ::1'), ['2001:db8::1', '::1'])
+        check('Invalid prefix rejection', self.extract_ips('192.168.1.1/99 2001:db8::/129'), [])
+        check('Range to CIDR', sorted(self.process_input_to_ips('192.168.1.1-192.168.1.3')),
+              ['192.168.1.1/32', '192.168.1.2/31'])
+        check('Safe optimization', self.optimize_cidr_list(['10.0.0.0/25', '10.0.0.128/25']), ['10.0.0.0/24'])
+        check('Deny/allow subtract', self.subtract_cidr_lists(['10.0.0.0/24'], ['10.0.0.0/25']), ['10.0.0.128/25'])
+
+        lines = []
+        ok = True
+        for name, passed, actual, expected in checks:
+            if passed:
+                lines.append(f"OK: {name}")
+            else:
+                ok = False
+                lines.append(f"FAIL: {name}\n  actual: {actual}\n  expected: {expected}")
+        return ok, lines
 
     def _token_to_network(self, token: str, include_ipv4: bool = True, include_ipv6: bool = True):
         """Convert an IP or CIDR token to a network using host masks for single IPs."""
@@ -562,6 +912,8 @@ class IPCIDRProcessor:
     def batch_process_files(self, input_files: List[str], output_folder: str, mask_name: str, 
                             optimize: bool = False, aggressive: bool = False, 
                             include_ipv4: bool = True, include_ipv6: bool = True,
+                            extraction_mode: str = 'smart', filters: Optional[Dict[str, bool]] = None,
+                            allow_expansion: bool = False, max_extra_addresses: int = 0,
                             progress_callback=None, stop_event=None) -> Dict[str, int]:
         """
         Process multiple files in batch mode using multiprocessing.
@@ -574,6 +926,10 @@ class IPCIDRProcessor:
             aggressive: Whether to use aggressive optimization
             include_ipv4: Whether to include IPv4 addresses
             include_ipv6: Whether to include IPv6 addresses
+            extraction_mode: smart or strict token extraction
+            filters: Address class filters
+            allow_expansion: Whether aggressive optimization may add extra addresses
+            max_extra_addresses: Maximum extra addresses allowed when expansion is enabled
             progress_callback: Optional function to call with progress updates (processed_files, total_files)
             stop_event: Optional multiprocessing.Event to signal stop
             
@@ -602,7 +958,8 @@ class IPCIDRProcessor:
             # Создаем задачи для каждого файла
             futures = {
                 executor.submit(self.process_single_file, file, output_folder, mask_name, 
-                                optimize, aggressive, include_ipv4, include_ipv6): file
+                                optimize, aggressive, include_ipv4, include_ipv6,
+                                extraction_mode, filters, allow_expansion, max_extra_addresses): file
                 for file in input_files
             }
             
@@ -657,8 +1014,10 @@ class IPCIDRProcessor:
             print(f"Error importing configuration: {e}")
             return False
 
-    def process_single_file(self, file_path: str, output_folder: str, mask_name: str, 
-                           optimize: bool, aggressive: bool, include_ipv4: bool, include_ipv6: bool) -> Dict[str, int]:
+    def process_single_file(self, file_path: str, output_folder: str, mask_name: str,
+                           optimize: bool, aggressive: bool, include_ipv4: bool, include_ipv6: bool,
+                           extraction_mode: str = 'smart', filters: Optional[Dict[str, bool]] = None,
+                           allow_expansion: bool = False, max_extra_addresses: int = 0) -> Dict[str, int]:
         """Process a single file and return its stats for multiprocessing."""
         stats = {
             'files_processed': 0,
@@ -678,18 +1037,21 @@ class IPCIDRProcessor:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
-            all_cidrs = self.process_input_to_ips(content, include_ipv4, include_ipv6)
-            stats['total_ips_found'] = len(all_cidrs)
-            
-            unique_cidrs = list(set(all_cidrs))
-            stats['unique_ips'] = len(unique_cidrs)
-            
-            if optimize:
-                optimized_cidrs = self.optimize_cidr_list(unique_cidrs, aggressive)
-                sorted_cidrs = self.sort_ip_addresses(optimized_cidrs)
-                stats['optimized_networks'] = len(sorted_cidrs)
-            else:
-                sorted_cidrs = self.sort_ip_addresses(unique_cidrs)
+            report = self.build_processing_report(
+                content,
+                include_ipv4=include_ipv4,
+                include_ipv6=include_ipv6,
+                extraction_mode=extraction_mode,
+                filters=filters,
+                optimize=optimize,
+                aggressive=aggressive,
+                allow_expansion=allow_expansion,
+                max_extra_addresses=max_extra_addresses,
+            )
+            sorted_cidrs = report['final_cidrs']
+            stats['total_ips_found'] = report['stats']['found_entries']
+            stats['unique_ips'] = report['stats']['after_filter']
+            stats['optimized_networks'] = len(sorted_cidrs)
             
             formatted_content = self.apply_mask(sorted_cidrs, mask_name)
             
@@ -706,6 +1068,8 @@ class IPCIDRProcessor:
 class IPCIDRProcessorGUI:
     def __init__(self, processor: IPCIDRProcessor):
         """Initialize the GUI for the IP CIDR processor."""
+        if not TKINTER_AVAILABLE:
+            raise RuntimeError("tkinter is not installed. Install python3-tk to use the GUI.")
         self.processor = processor
 
         # Use TkinterDnD if available for drag and drop support
@@ -715,7 +1079,7 @@ class IPCIDRProcessorGUI:
             self.root = tk.Tk()
 
         self.root.title("IP CIDR Processor" + (" (Drag & Drop Enabled)" if TKDND_AVAILABLE else ""))
-        self.root.geometry("900x700")
+        self.root.geometry("1040x780")
     
         # Register cleanup on exit
         atexit.register(self.cleanup)
@@ -731,6 +1095,7 @@ class IPCIDRProcessorGUI:
         self.tab_optimize = ttk.Frame(self.notebook)
         self.tab_url = ttk.Frame(self.notebook)
         self.tab_batch = ttk.Frame(self.notebook)  # New batch tab
+        self.tab_compare = ttk.Frame(self.notebook)
         self.tab_masks = ttk.Frame(self.notebook)
         self.tab_config = ttk.Frame(self.notebook)  # New config tab
         
@@ -740,6 +1105,7 @@ class IPCIDRProcessorGUI:
         self.notebook.add(self.tab_optimize, text="Optimize CIDR")
         self.notebook.add(self.tab_url, text="URL Processing")
         self.notebook.add(self.tab_batch, text="Batch Processing")  # New batch tab
+        self.notebook.add(self.tab_compare, text="Compare Lists")
         self.notebook.add(self.tab_masks, text="Mask Settings")
         self.notebook.add(self.tab_config, text="Configuration")  # New config tab
         
@@ -749,6 +1115,7 @@ class IPCIDRProcessorGUI:
         self.setup_optimize_tab()
         self.setup_url_tab()
         self.setup_batch_tab()  # Setup batch tab
+        self.setup_compare_tab()
         self.setup_masks_tab()
         self.setup_config_tab()  # Setup config tab
         
@@ -845,7 +1212,8 @@ class IPCIDRProcessorGUI:
             'ranges': self.tab_ranges,
             'optimize': self.tab_optimize,
             'url': self.tab_url,
-            'batch': self.tab_batch
+            'batch': self.tab_batch,
+            'compare': self.tab_compare
         }
         for tab_name, tab_frame in tabs.items():
             ip_frame = ttk.Frame(tab_frame)
@@ -881,37 +1249,45 @@ class IPCIDRProcessorGUI:
         # Ctrl+Q - Quit
         self.root.bind('<Control-q>', lambda e: self.on_closing())
 
+    def current_tab_label(self) -> str:
+        """Return the visible label of the selected notebook tab."""
+        return self.notebook.tab(self.notebook.select(), "text")
+
     def add_files_shortcut(self):
         """Add files via keyboard shortcut based on current tab."""
-        current_tab = self.notebook.index(self.notebook.select())
-        if current_tab == 0:  # Process Files
+        current_tab = self.current_tab_label()
+        if current_tab == "Process Files":
             self.add_local_files()
-        elif current_tab == 2:  # Optimize
+        elif current_tab == "Optimize CIDR":
             self.add_local_files(optimize=True)
-        elif current_tab == 3:  # URL
+        elif current_tab == "URL Processing":
             self.add_url()
-        elif current_tab == 4:  # Batch
+        elif current_tab == "Batch Processing":
             self.add_local_files(batch=True)
+        elif current_tab == "Compare Lists":
+            self.add_compare_files('deny')
 
     def save_shortcut(self):
         """Save results via keyboard shortcut based on current tab."""
-        current_tab = self.notebook.index(self.notebook.select())
-        if current_tab == 1:  # IP Ranges tab
+        current_tab = self.current_tab_label()
+        if current_tab == "IP Ranges":
             self.save_results()
 
     def delete_selected_items(self):
         """Delete selected items from the current listbox."""
-        current_tab = self.notebook.index(self.notebook.select())
+        current_tab = self.current_tab_label()
         listbox = None
 
-        if current_tab == 0:  # Process Files
+        if current_tab == "Process Files":
             listbox = self.listbox_files
-        elif current_tab == 2:  # Optimize
+        elif current_tab == "Optimize CIDR":
             listbox = self.listbox_files_optimize
-        elif current_tab == 3:  # URL
+        elif current_tab == "URL Processing":
             listbox = self.listbox_urls
-        elif current_tab == 4:  # Batch
+        elif current_tab == "Batch Processing":
             listbox = self.listbox_batch_files
+        elif current_tab == "Compare Lists":
+            listbox = self.listbox_compare_deny
 
         if listbox:
             selection = listbox.curselection()
@@ -921,32 +1297,36 @@ class IPCIDRProcessorGUI:
 
     def select_all_items(self):
         """Select all items in the current listbox."""
-        current_tab = self.notebook.index(self.notebook.select())
+        current_tab = self.current_tab_label()
         listbox = None
 
-        if current_tab == 0:  # Process Files
+        if current_tab == "Process Files":
             listbox = self.listbox_files
-        elif current_tab == 2:  # Optimize
+        elif current_tab == "Optimize CIDR":
             listbox = self.listbox_files_optimize
-        elif current_tab == 3:  # URL
+        elif current_tab == "URL Processing":
             listbox = self.listbox_urls
-        elif current_tab == 4:  # Batch
+        elif current_tab == "Batch Processing":
             listbox = self.listbox_batch_files
+        elif current_tab == "Compare Lists":
+            listbox = self.listbox_compare_deny
 
         if listbox:
             listbox.select_set(0, tk.END)
 
     def process_shortcut(self):
         """Process files via F5 shortcut based on current tab."""
-        current_tab = self.notebook.index(self.notebook.select())
-        if current_tab == 0:  # Process Files
+        current_tab = self.current_tab_label()
+        if current_tab == "Process Files":
             self.process_local_files()
-        elif current_tab == 2:  # Optimize
+        elif current_tab == "Optimize CIDR":
             self.optimize_files()
-        elif current_tab == 3:  # URL
+        elif current_tab == "URL Processing":
             self.process_urls()
-        elif current_tab == 4:  # Batch
+        elif current_tab == "Batch Processing":
             self.process_batch_files()
+        elif current_tab == "Compare Lists":
+            self.compare_lists()
 
     def add_context_menu(self, listbox: tk.Listbox, listbox_type: str = "files"):
         """Add context menu to a listbox.
@@ -1033,23 +1413,28 @@ class IPCIDRProcessorGUI:
         self.status_var.set(message)
 
         # Update file count based on current tab
-        current_tab = self.notebook.index(self.notebook.select())
+        current_tab = self.current_tab_label()
         count = 0
 
-        if current_tab == 0:  # Process Files
+        if current_tab == "Process Files":
             count = self.listbox_files.size()
-        elif current_tab == 2:  # Optimize
+        elif current_tab == "Optimize CIDR":
             count = self.listbox_files_optimize.size()
-        elif current_tab == 3:  # URL
+        elif current_tab == "URL Processing":
             count = self.listbox_urls.size()
-        elif current_tab == 4:  # Batch
+        elif current_tab == "Batch Processing":
             count = self.listbox_batch_files.size()
+        elif current_tab == "Compare Lists":
+            deny = self.listbox_compare_deny.size()
+            allow = self.listbox_compare_allow.size()
+            self.file_count_var.set(f"Deny: {deny} Allow: {allow}")
+            count = None
 
-        if current_tab in [0, 2, 4]:  # File tabs
+        if current_tab in ["Process Files", "Optimize CIDR", "Batch Processing"]:
             self.file_count_var.set(f"Files: {count}")
-        elif current_tab == 3:  # URL tab
+        elif current_tab == "URL Processing":
             self.file_count_var.set(f"URLs: {count}")
-        else:
+        elif count is not None:
             self.file_count_var.set("")
 
         if not hasattr(self, '_status_update_scheduled'):
@@ -1094,6 +1479,152 @@ class IPCIDRProcessorGUI:
         except ValueError:
             return False
 
+    def add_processing_options(self, parent, prefix: str, include_optimize: bool = True):
+        """Add shared extraction, filtering, and optimization controls."""
+        options_frame = ttk.LabelFrame(parent, text="Processing Options")
+        options_frame.pack(fill='x', padx=10, pady=5)
+
+        row_one = ttk.Frame(options_frame)
+        row_one.pack(fill='x', padx=5, pady=3)
+        ttk.Label(row_one, text="Extraction:").pack(side='left', padx=5)
+        mode_var = tk.StringVar(value='smart')
+        setattr(self, f"{prefix}_mode_var", mode_var)
+        mode_combo = ttk.Combobox(row_one, textvariable=mode_var, values=EXTRACTION_MODES, state='readonly', width=10)
+        mode_combo.pack(side='left', padx=5)
+
+        if include_optimize:
+            optimize_var = tk.BooleanVar(value=False)
+            setattr(self, f"{prefix}_optimize_results_var", optimize_var)
+            ttk.Checkbutton(row_one, text="Optimize", variable=optimize_var).pack(side='left', padx=8)
+
+        allow_expansion_var = tk.BooleanVar(value=False)
+        setattr(self, f"{prefix}_allow_expansion_var", allow_expansion_var)
+        ttk.Checkbutton(row_one, text="Allow coverage expansion", variable=allow_expansion_var).pack(side='left', padx=8)
+
+        ttk.Label(row_one, text="Max extra:").pack(side='left', padx=5)
+        max_extra_var = tk.StringVar(value="0")
+        setattr(self, f"{prefix}_max_extra_var", max_extra_var)
+        ttk.Entry(row_one, textvariable=max_extra_var, width=8).pack(side='left', padx=3)
+
+        row_two = ttk.Frame(options_frame)
+        row_two.pack(fill='x', padx=5, pady=3)
+        filter_defs = [
+            ('public_only', 'Public only'),
+            ('exclude_private', 'No private'),
+            ('exclude_loopback', 'No loopback'),
+            ('exclude_link_local', 'No link-local'),
+            ('exclude_multicast', 'No multicast'),
+            ('exclude_reserved', 'No reserved'),
+            ('exclude_unspecified', 'No unspecified'),
+        ]
+        for key, label in filter_defs:
+            var = tk.BooleanVar(value=False)
+            setattr(self, f"{prefix}_{key}_var", var)
+            ttk.Checkbutton(row_two, text=label, variable=var).pack(side='left', padx=4)
+
+    def get_filter_options(self, prefix: str) -> Dict[str, bool]:
+        """Read address-class filter options from a tab."""
+        return {
+            key: getattr(self, f"{prefix}_{key}_var").get()
+            for key in FILTER_DEFAULTS
+            if hasattr(self, f"{prefix}_{key}_var")
+        }
+
+    def get_processing_options(self, prefix: str, optimize_default: bool = False) -> Dict:
+        """Read shared processing options from a tab."""
+        max_extra = 0
+        if hasattr(self, f"{prefix}_max_extra_var"):
+            try:
+                max_extra = max(0, int(getattr(self, f"{prefix}_max_extra_var").get()))
+            except ValueError:
+                max_extra = 0
+        optimize = optimize_default
+        if hasattr(self, f"{prefix}_optimize_results_var"):
+            optimize = getattr(self, f"{prefix}_optimize_results_var").get()
+        mode_var = getattr(self, f"{prefix}_mode_var", None)
+        allow_expansion_var = getattr(self, f"{prefix}_allow_expansion_var", None)
+        return {
+            'extraction_mode': mode_var.get() if mode_var else 'smart',
+            'filters': self.get_filter_options(prefix),
+            'optimize': optimize,
+            'allow_expansion': allow_expansion_var.get() if allow_expansion_var else False,
+            'max_extra_addresses': max_extra,
+        }
+
+    def read_files_content(self, files: Tuple[str, ...]) -> Tuple[Optional[str], Optional[str]]:
+        """Read selected files and return combined content or an error message."""
+        content_parts = []
+        for file in files:
+            try:
+                with open(file, 'r', encoding='utf-8', errors='ignore') as handle:
+                    content_parts.append(handle.read())
+            except Exception as e:
+                return None, f"Error processing file {file}: {e}"
+        return '\n'.join(content_parts), None
+
+    def show_processing_preview(self, title: str, formatted_content: str, report: Dict,
+                                default_extension: str = ".txt"):
+        """Show a preview dialog with stats, result, report, copy, and save actions."""
+        preview_dialog = tk.Toplevel(self.root)
+        preview_dialog.title(title)
+        preview_dialog.geometry("820x620")
+
+        stats_text = self.processor.format_processing_report(report)
+        stats_frame = ttk.LabelFrame(preview_dialog, text="Stats")
+        stats_frame.pack(fill='x', padx=10, pady=5)
+        stats_label = ttk.Label(stats_frame, text=stats_text.split('\n\n')[0], justify='left')
+        stats_label.pack(anchor='w', padx=8, pady=5)
+
+        result_frame = ttk.LabelFrame(preview_dialog, text="Preview")
+        result_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        text_widget = tk.Text(result_frame, wrap='none', height=18)
+        text_widget.pack(side='left', fill='both', expand=True)
+        scrollbar_y = ttk.Scrollbar(result_frame, orient='vertical', command=text_widget.yview)
+        scrollbar_y.pack(side='right', fill='y')
+        text_widget.configure(yscrollcommand=scrollbar_y.set)
+        text_widget.insert('1.0', formatted_content)
+        text_widget.config(state='disabled')
+
+        btn_frame = ttk.Frame(preview_dialog)
+        btn_frame.pack(fill='x', padx=10, pady=10)
+
+        def copy_result():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(formatted_content)
+            messagebox.showinfo("Copied", "Preview copied to clipboard", parent=preview_dialog)
+
+        def save_result():
+            output_path = filedialog.asksaveasfilename(
+                defaultextension=default_extension,
+                filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")],
+                parent=preview_dialog
+            )
+            if output_path:
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as handle:
+                        handle.write(formatted_content)
+                    messagebox.showinfo("Success", f"Results saved to: {output_path}", parent=preview_dialog)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error saving results: {e}", parent=preview_dialog)
+
+        def show_report():
+            report_dialog = tk.Toplevel(preview_dialog)
+            report_dialog.title("Processing Report")
+            report_dialog.geometry("700x500")
+            report_text = tk.Text(report_dialog, wrap='word')
+            report_text.pack(fill='both', expand=True, padx=10, pady=10)
+            report_text.insert('1.0', stats_text)
+            report_text.config(state='disabled')
+            ttk.Button(report_dialog, text="Close", command=report_dialog.destroy).pack(pady=8)
+            report_dialog.transient(preview_dialog)
+
+        ttk.Button(btn_frame, text="Copy", command=copy_result).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Save", command=save_result).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Report", command=show_report).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Close", command=preview_dialog.destroy).pack(side='right', padx=5)
+
+        preview_dialog.transient(self.root)
+
     def setup_process_tab(self):
         """Set up the file processing tab."""
         frame_files = ttk.LabelFrame(self.tab_process, text="Select Files (Drag & Drop Supported)" if TKDND_AVAILABLE else "Select Files")
@@ -1129,6 +1660,8 @@ class IPCIDRProcessorGUI:
         self.process_mask_combo = ttk.Combobox(output_frame, textvariable=self.process_mask_var)
         self.process_mask_combo['values'] = self.processor.get_mask_names()
         self.process_mask_combo.grid(row=0, column=1, padx=5, pady=5, sticky='w')
+
+        self.add_processing_options(self.tab_process, 'process', include_optimize=True)
         
         btn_process = ttk.Button(self.tab_process, text="Process Files", command=self.process_local_files)
         btn_process.pack(pady=10)
@@ -1211,6 +1744,8 @@ class IPCIDRProcessorGUI:
         self.optimize_mask_combo = ttk.Combobox(output_frame, textvariable=self.optimize_mask_var)
         self.optimize_mask_combo['values'] = self.processor.get_mask_names()
         self.optimize_mask_combo.pack(anchor='w', padx=5, pady=5)
+
+        self.add_processing_options(self.tab_optimize, 'optimize', include_optimize=False)
         
         ttk.Button(self.tab_optimize, text="Optimize CIDR", command=self.optimize_files).pack(pady=10)
 
@@ -1249,6 +1784,8 @@ class IPCIDRProcessorGUI:
         self.url_mask_combo = ttk.Combobox(output_frame, textvariable=self.url_mask_var)
         self.url_mask_combo['values'] = self.processor.get_mask_names()
         self.url_mask_combo.pack(anchor='w', padx=5, pady=5)
+
+        self.add_processing_options(self.tab_url, 'url', include_optimize=False)
         
         ttk.Button(self.tab_url, text="Process URLs", command=self.process_urls).pack(pady=10)
 
@@ -1433,6 +1970,7 @@ class IPCIDRProcessorGUI:
         self.optimize_mask_combo['values'] = mask_names
         self.url_mask_combo['values'] = mask_names
         self.batch_mask_combo['values'] = mask_names  # Добавлено для вкладки Batch Processing
+        self.compare_mask_combo['values'] = mask_names
         
         # Обновляем default_mask_combo, если он существует
         if hasattr(self, 'default_mask_combo'):
@@ -1447,6 +1985,8 @@ class IPCIDRProcessorGUI:
             self.url_mask_combo.current(0)
         if self.batch_mask_var.get() not in mask_names:  # Добавлено для batch_mask_combo
             self.batch_mask_combo.current(0)
+        if self.compare_mask_var.get() not in mask_names:
+            self.compare_mask_combo.current(0)
         if hasattr(self, 'default_mask_var') and self.default_mask_var.get() not in mask_names:
             self.default_mask_combo.current(0)
 
@@ -1509,10 +2049,13 @@ class IPCIDRProcessorGUI:
         self.batch_mask_combo = ttk.Combobox(mask_frame, textvariable=self.batch_mask_var)
         self.batch_mask_combo['values'] = self.processor.get_mask_names()
         self.batch_mask_combo.pack(side='left', padx=5)
+
+        self.add_processing_options(self.tab_batch, 'batch', include_optimize=False)
         
         # Process and Stop buttons
         process_frame = ttk.Frame(self.tab_batch)
         process_frame.pack(pady=10)
+        ttk.Button(process_frame, text="Preview Combined", command=self.preview_batch_combined).pack(side='left', padx=5)
         ttk.Button(process_frame, text="Process All Files", command=self.process_batch_files).pack(side='left', padx=5)
         self.stop_button = ttk.Button(process_frame, text="Stop Processing", command=self.stop_batch_processing, state='disabled')
         self.stop_button.pack(side='left', padx=5)
@@ -1526,12 +2069,90 @@ class IPCIDRProcessorGUI:
         
         self.batch_progress_bar = ttk.Progressbar(progress_frame, mode="determinate")
         self.batch_progress_bar.pack(fill='x', padx=5, pady=5)
+
+    def setup_compare_tab(self):
+        """Set up denylist/allowlist comparison tab."""
+        lists_frame = ttk.Frame(self.tab_compare)
+        lists_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        deny_frame = ttk.LabelFrame(lists_frame, text="Denylist Files")
+        deny_frame.pack(side='left', fill='both', expand=True, padx=(0, 5))
+        self.listbox_compare_deny = tk.Listbox(deny_frame)
+        self.listbox_compare_deny.pack(side='left', fill='both', expand=True)
+        deny_scrollbar = ttk.Scrollbar(deny_frame, orient="vertical", command=self.listbox_compare_deny.yview)
+        deny_scrollbar.pack(side='right', fill='y')
+        self.listbox_compare_deny.config(yscrollcommand=deny_scrollbar.set)
+        self.enable_drag_and_drop(self.listbox_compare_deny, "files")
+        self.add_context_menu(self.listbox_compare_deny, "files")
+
+        allow_frame = ttk.LabelFrame(lists_frame, text="Allowlist Files")
+        allow_frame.pack(side='left', fill='both', expand=True, padx=(5, 0))
+        self.listbox_compare_allow = tk.Listbox(allow_frame)
+        self.listbox_compare_allow.pack(side='left', fill='both', expand=True)
+        allow_scrollbar = ttk.Scrollbar(allow_frame, orient="vertical", command=self.listbox_compare_allow.yview)
+        allow_scrollbar.pack(side='right', fill='y')
+        self.listbox_compare_allow.config(yscrollcommand=allow_scrollbar.set)
+        self.enable_drag_and_drop(self.listbox_compare_allow, "files")
+        self.add_context_menu(self.listbox_compare_allow, "files")
+
+        btn_frame = ttk.Frame(self.tab_compare)
+        btn_frame.pack(fill='x', padx=10, pady=5)
+        ttk.Button(btn_frame, text="Add Deny Files", command=lambda: self.add_compare_files('deny')).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Add Allow Files", command=lambda: self.add_compare_files('allow')).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Clear Deny", command=lambda: self.listbox_compare_deny.delete(0, tk.END)).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Clear Allow", command=lambda: self.listbox_compare_allow.delete(0, tk.END)).pack(side='left', padx=5)
+
+        output_frame = ttk.LabelFrame(self.tab_compare, text="Output")
+        output_frame.pack(fill='x', padx=10, pady=5)
+        ttk.Label(output_frame, text="Apply Mask:").pack(side='left', padx=5)
+        self.compare_mask_var = tk.StringVar(value=self.processor.config['default_mask'])
+        self.compare_mask_combo = ttk.Combobox(output_frame, textvariable=self.compare_mask_var)
+        self.compare_mask_combo['values'] = self.processor.get_mask_names()
+        self.compare_mask_combo.pack(side='left', padx=5)
+
+        self.compare_optimize_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(output_frame, text="Optimize result", variable=self.compare_optimize_var).pack(side='left', padx=8)
+        self.add_processing_options(self.tab_compare, 'compare', include_optimize=False)
+        ttk.Button(self.tab_compare, text="Subtract Allowlist and Preview", command=self.compare_lists).pack(pady=10)
     
     def browse_batch_output_folder(self):
         """Browse for output folder for batch processing."""
         folder = filedialog.askdirectory(title="Select Output Folder")
         if folder:
             self.batch_output_folder_var.set(folder)
+
+    def preview_batch_combined(self):
+        """Preview all batch files as one combined output before writing per-file results."""
+        files = self.listbox_batch_files.get(0, tk.END)
+        if not files:
+            messagebox.showwarning("Warning", "No files selected for batch processing.")
+            return
+
+        include_ipv4 = self.batch_ipv4_var.get()
+        include_ipv6 = self.batch_ipv6_var.get()
+        if not include_ipv4 and not include_ipv6:
+            messagebox.showwarning("Warning", "At least one IP version (IPv4 or IPv6) must be selected.")
+            return
+
+        content, error = self.read_files_content(files)
+        if error:
+            messagebox.showerror("Error", error)
+            return
+
+        options = self.get_processing_options('batch', optimize_default=self.batch_optimize_var.get())
+        report = self.processor.build_processing_report(
+            content or '',
+            include_ipv4=include_ipv4,
+            include_ipv6=include_ipv6,
+            extraction_mode=options['extraction_mode'],
+            filters=options['filters'],
+            optimize=self.batch_optimize_var.get(),
+            aggressive=self.batch_aggressive_var.get(),
+            allow_expansion=options['allow_expansion'],
+            max_extra_addresses=options['max_extra_addresses'],
+        )
+        formatted_content = self.processor.apply_mask(report['final_cidrs'], self.batch_mask_var.get())
+        self.show_processing_preview("Batch Combined Preview", formatted_content, report)
     
     def process_batch_files(self):
         """Обработка файлов в пакетном режиме с возможностью остановки."""
@@ -1550,6 +2171,7 @@ class IPCIDRProcessorGUI:
         mask_name = self.batch_mask_var.get()
         optimize = self.batch_optimize_var.get()
         aggressive = self.batch_aggressive_var.get()
+        options = self.get_processing_options('batch', optimize_default=optimize)
         
         self.batch_progress_bar["value"] = 0
         self.batch_progress_bar["maximum"] = len(files)
@@ -1582,6 +2204,10 @@ class IPCIDRProcessorGUI:
             try:
                 stats = self.processor.batch_process_files(
                     files, output_folder, mask_name, optimize, aggressive, include_ipv4, include_ipv6,
+                    extraction_mode=options['extraction_mode'],
+                    filters=options['filters'],
+                    allow_expansion=options['allow_expansion'],
+                    max_extra_addresses=options['max_extra_addresses'],
                     progress_callback=update_progress,
                     stop_event=self.stop_event
                 )
@@ -1633,6 +2259,9 @@ class IPCIDRProcessorGUI:
         if hasattr(self, 'stop_event'):
             self.stop_event.set()
             self.batch_progress_var.set("Stopping batch processing...")
+            if not PSUTIL_AVAILABLE:
+                self.stop_button['state'] = 'disabled'
+                return
             
             # Terminate all child processes forcefully
             current_process = psutil.Process()
@@ -1684,6 +2313,11 @@ class IPCIDRProcessorGUI:
         btn_reset = ttk.Button(reset_frame, text="Reset Configuration", 
                               command=self.reset_config_gui)
         btn_reset.pack(side='left', padx=10)
+
+        selftest_frame = ttk.Frame(config_frame)
+        selftest_frame.pack(fill='x', padx=5, pady=10)
+        ttk.Label(selftest_frame, text="Self Test:").pack(side='left', padx=5)
+        ttk.Button(selftest_frame, text="Run Self-Test", command=self.run_self_test_gui).pack(side='left', padx=10)
         
         # Warning
         ttk.Label(config_frame, 
@@ -1729,7 +2363,95 @@ class IPCIDRProcessorGUI:
             messagebox.showinfo("Success", "Configuration reset to default")
             self.refresh_masks()
 
+    def run_self_test_gui(self):
+        """Run built-in processor checks and show the result."""
+        ok, lines = self.processor.run_self_test()
+        title = "Self-Test Passed" if ok else "Self-Test Failed"
+        message = "\n".join(lines)
+        if ok:
+            messagebox.showinfo(title, message)
+        else:
+            messagebox.showerror(title, message)
+
     # File Processing Tab Methods
+    def add_compare_files(self, list_type: str):
+        """Add files to denylist or allowlist compare listbox."""
+        files = filedialog.askopenfilenames(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
+        listbox = self.listbox_compare_allow if list_type == 'allow' else self.listbox_compare_deny
+        for file in files:
+            if file not in listbox.get(0, tk.END):
+                listbox.insert(tk.END, file)
+
+    def compare_lists(self):
+        """Subtract allowlist files from denylist files and show a preview."""
+        include_ipv4 = self.compare_ipv4_var.get()
+        include_ipv6 = self.compare_ipv6_var.get()
+        if not include_ipv4 and not include_ipv6:
+            messagebox.showwarning("Warning", "At least one IP version (IPv4 or IPv6) must be selected.")
+            return
+
+        deny_files = self.listbox_compare_deny.get(0, tk.END)
+        allow_files = self.listbox_compare_allow.get(0, tk.END)
+        if not deny_files:
+            messagebox.showwarning("Warning", "No denylist files selected.")
+            return
+
+        deny_content, error = self.read_files_content(deny_files)
+        if error:
+            messagebox.showerror("Error", error)
+            return
+        allow_content, error = self.read_files_content(allow_files)
+        if error:
+            messagebox.showerror("Error", error)
+            return
+
+        options = self.get_processing_options('compare')
+        deny_report = self.processor.build_processing_report(
+            deny_content or '',
+            include_ipv4=include_ipv4,
+            include_ipv6=include_ipv6,
+            extraction_mode=options['extraction_mode'],
+            filters=options['filters'],
+            optimize=False,
+        )
+        allow_report = self.processor.build_processing_report(
+            allow_content or '',
+            include_ipv4=include_ipv4,
+            include_ipv6=include_ipv6,
+            extraction_mode=options['extraction_mode'],
+            filters=None,
+            optimize=False,
+        )
+
+        result = self.processor.subtract_cidr_lists(deny_report['filtered_cidrs'], allow_report['filtered_cidrs'])
+        if self.compare_optimize_var.get():
+            result = self.processor.optimize_cidr_list(
+                result,
+                aggressive=True,
+                allow_expansion=options['allow_expansion'],
+                max_extra_addresses=options['max_extra_addresses'],
+            )
+            result = self.processor.sort_ip_addresses(result)
+
+        report = {
+            'final_cidrs': result,
+            'suspicious': deny_report['suspicious'] + allow_report['suspicious'],
+            'stats': {
+                'lines': deny_report['stats']['lines'] + allow_report['stats']['lines'],
+                'found_entries': deny_report['stats']['found_entries'] + allow_report['stats']['found_entries'],
+                'ranges_found': deny_report['stats']['ranges_found'] + allow_report['stats']['ranges_found'],
+                'unique_networks': deny_report['stats']['unique_networks'],
+                'filtered_out': deny_report['stats']['filtered_out'],
+                'after_filter': deny_report['stats']['after_filter'],
+                'final_networks': len(result),
+                'addresses_covered': self.processor.cidr_total_addresses(result),
+                'extra_addresses': 0,
+                'suspicious_count': len(deny_report['suspicious']) + len(allow_report['suspicious']),
+            }
+        }
+        formatted_content = self.processor.apply_mask(result, self.compare_mask_var.get())
+        self.show_processing_preview("Compare Lists Preview", formatted_content, report)
+
     def add_local_files(self, optimize=False, batch=False):
         """Add local files to the appropriate listbox."""
         files = filedialog.askopenfilenames(filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
@@ -1756,29 +2478,27 @@ class IPCIDRProcessorGUI:
             messagebox.showwarning("Warning", "No files selected.")
             return
         
-        all_cidrs = []
-        for file in files:
-            try:
-                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                all_cidrs.extend(self.processor.process_input_to_ips(content, include_ipv4, include_ipv6))
-            except Exception as e:
-                messagebox.showerror("Error", f"Error processing file {file}: {e}")
-                return
-        
-        unique_cidrs = list(set(all_cidrs))
-        sorted_cidrs = self.processor.sort_ip_addresses(unique_cidrs)
+        content, error = self.read_files_content(files)
+        if error:
+            messagebox.showerror("Error", error)
+            return
+
+        options = self.get_processing_options('process')
+        report = self.processor.build_processing_report(
+            content or '',
+            include_ipv4=include_ipv4,
+            include_ipv6=include_ipv6,
+            extraction_mode=options['extraction_mode'],
+            filters=options['filters'],
+            optimize=options['optimize'],
+            aggressive=True,
+            allow_expansion=options['allow_expansion'],
+            max_extra_addresses=options['max_extra_addresses'],
+        )
+        sorted_cidrs = report['final_cidrs']
         mask_name = self.process_mask_var.get()
         formatted_content = self.processor.apply_mask(sorted_cidrs, mask_name)
-        
-        output_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
-        if output_path:
-            try:
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(formatted_content)
-                messagebox.showinfo("Success", f"Processed {len(sorted_cidrs)} IPs saved to: {output_path}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Error saving results: {e}")
+        self.show_processing_preview("Process Files Preview", formatted_content, report)
 
     def convert_range_to_cidr(self):
         """Convert IP range to CIDR notation."""
@@ -1930,33 +2650,29 @@ class IPCIDRProcessorGUI:
         if not files:
             messagebox.showwarning("Warning", "No files selected.")
             return
-        
-        all_cidrs = []
-        for file in files:
-            try:
-                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                cidrs = self.processor.process_input_to_ips(content, include_ipv4, include_ipv6)
-                all_cidrs.extend(cidrs)
-            except Exception as e:
-                messagebox.showerror("Error", f"Error processing file {file}: {e}")
-                return
-        
-        unique_cidrs = list(set(all_cidrs))
+
+        content, error = self.read_files_content(files)
+        if error:
+            messagebox.showerror("Error", error)
+            return
+
         aggressive = self.aggressive_var.get()
-        optimized_cidrs = self.processor.optimize_cidr_list(unique_cidrs, aggressive)
-        sorted_cidrs = self.processor.sort_ip_addresses(optimized_cidrs)
+        options = self.get_processing_options('optimize', optimize_default=True)
+        report = self.processor.build_processing_report(
+            content or '',
+            include_ipv4=include_ipv4,
+            include_ipv6=include_ipv6,
+            extraction_mode=options['extraction_mode'],
+            filters=options['filters'],
+            optimize=True,
+            aggressive=aggressive,
+            allow_expansion=options['allow_expansion'],
+            max_extra_addresses=options['max_extra_addresses'],
+        )
+        sorted_cidrs = report['final_cidrs']
         mask_name = self.optimize_mask_var.get()
         formatted_content = self.processor.apply_mask(sorted_cidrs, mask_name)
-        
-        output_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
-        if output_path:
-            try:
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(formatted_content)
-                messagebox.showinfo("Success", f"Optimized {len(unique_cidrs)} IPs into {len(sorted_cidrs)} networks.\nResults saved to: {output_path}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Error saving results: {e}")
+        self.show_processing_preview("Optimize CIDR Preview", formatted_content, report)
 
     def add_url(self):
         """Add a URL to the URL listbox with validation."""
@@ -1988,46 +2704,44 @@ class IPCIDRProcessorGUI:
         if not urls:
             messagebox.showwarning("Warning", "No URLs added.")
             return
-        
-        output_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt"), ("All Files", "*.*")])
-        if not output_path:
-            return
 
         mask_name = self.url_mask_var.get()
         should_optimize = self.url_optimize_var.get()
+        options = self.get_processing_options('url', optimize_default=should_optimize)
         self.update_status_bar("Processing URLs...")
 
         def process_urls_thread():
             try:
-                all_cidrs = []
                 errors = []
+                content_parts = []
                 for url in urls:
                     content = self.processor.download_file(url)
                     if not content:
                         errors.append(f"No content downloaded from {url}")
                         continue
-                    all_cidrs.extend(self.processor.process_input_to_ips(content, include_ipv4, include_ipv6))
+                    content_parts.append(content)
 
-                unique_cidrs = list(set(all_cidrs))
-                if should_optimize:
-                    optimized_cidrs = self.processor.optimize_cidr_list(unique_cidrs)
-                    sorted_cidrs = self.processor.sort_ip_addresses(optimized_cidrs)
-                else:
-                    sorted_cidrs = self.processor.sort_ip_addresses(unique_cidrs)
-
-                formatted_content = self.processor.apply_mask(sorted_cidrs, mask_name)
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(formatted_content)
-
-                message = f"Processed {len(unique_cidrs)} IPs"
-                if should_optimize:
-                    message += f" and optimized to {len(sorted_cidrs)} networks"
-                message += f".\nResults saved to: {output_path}"
+                report = self.processor.build_processing_report(
+                    '\n'.join(content_parts),
+                    include_ipv4=include_ipv4,
+                    include_ipv6=include_ipv6,
+                    extraction_mode=options['extraction_mode'],
+                    filters=options['filters'],
+                    optimize=should_optimize,
+                    aggressive=True,
+                    allow_expansion=options['allow_expansion'],
+                    max_extra_addresses=options['max_extra_addresses'],
+                )
                 if errors:
-                    message += f"\n\nWarnings:\n" + "\n".join(errors[:5])
+                    report['suspicious'].extend({'value': error, 'reason': 'Download warning'} for error in errors)
+                    report['stats']['suspicious_count'] = len(report['suspicious'])
+
+                formatted_content = self.processor.apply_mask(report['final_cidrs'], mask_name)
 
                 self.root.after(0, lambda: self.update_status_bar("Ready"))
-                self.root.after(0, lambda msg=message: messagebox.showinfo("Success", msg))
+                self.root.after(0, lambda content=formatted_content, rep=report: self.show_processing_preview(
+                    "URL Processing Preview", content, rep
+                ))
             except Exception as e:
                 error_message = str(e)
                 self.root.after(0, lambda: self.update_status_bar("Ready"))
@@ -2281,6 +2995,8 @@ class IPCIDRProcessorGUI:
 
     def cleanup(self):
         """Clean up any running processes when the application exits."""
+        if not PSUTIL_AVAILABLE:
+            return
         # Terminate all child processes
         current_process = psutil.Process()
         children = current_process.children(recursive=True)
@@ -2305,6 +3021,85 @@ class IPCIDRProcessorGUI:
         self.cleanup()
         self.root.destroy()
 
+
+def build_cli_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser used when arguments are provided."""
+    parser = argparse.ArgumentParser(description="Extract, filter, optimize, and format IP/CIDR lists.")
+    parser.add_argument('inputs', nargs='*', help='Input text files. If omitted, the GUI starts.')
+    parser.add_argument('-o', '--output', help='Output file. Defaults to stdout.')
+    parser.add_argument('--mask', default='default', help='Output mask name.')
+    parser.add_argument('--mode', choices=EXTRACTION_MODES, default='smart', help='Extraction mode.')
+    parser.add_argument('--ipv4-only', action='store_true', help='Process only IPv4.')
+    parser.add_argument('--ipv6-only', action='store_true', help='Process only IPv6.')
+    parser.add_argument('--optimize', action='store_true', help='Collapse duplicate and adjacent CIDR networks.')
+    parser.add_argument('--aggressive', action='store_true', help='Enable aggressive optimization mode.')
+    parser.add_argument('--allow-expansion', action='store_true', help='Allow aggressive merge to add extra covered addresses.')
+    parser.add_argument('--max-extra-addresses', type=int, default=0, help='Maximum extra addresses allowed with --allow-expansion.')
+    parser.add_argument('--public-only', action='store_true', help='Keep only globally routable networks.')
+    parser.add_argument('--exclude-private', action='store_true', help='Drop private networks.')
+    parser.add_argument('--exclude-loopback', action='store_true', help='Drop loopback networks.')
+    parser.add_argument('--exclude-link-local', action='store_true', help='Drop link-local networks.')
+    parser.add_argument('--exclude-multicast', action='store_true', help='Drop multicast networks.')
+    parser.add_argument('--exclude-reserved', action='store_true', help='Drop reserved networks.')
+    parser.add_argument('--exclude-unspecified', action='store_true', help='Drop unspecified networks.')
+    parser.add_argument('--report', action='store_true', help='Print processing report to stderr.')
+    return parser
+
+
+def run_cli(argv: Optional[List[str]] = None) -> int:
+    """Run the non-GUI CLI mode."""
+    parser = build_cli_parser()
+    args = parser.parse_args(argv)
+    if not args.inputs:
+        return 2
+
+    include_ipv4 = not args.ipv6_only
+    include_ipv6 = not args.ipv4_only
+    if not include_ipv4 and not include_ipv6:
+        parser.error('--ipv4-only and --ipv6-only cannot be used together')
+
+    filters = {
+        'public_only': args.public_only,
+        'exclude_private': args.exclude_private,
+        'exclude_loopback': args.exclude_loopback,
+        'exclude_link_local': args.exclude_link_local,
+        'exclude_multicast': args.exclude_multicast,
+        'exclude_reserved': args.exclude_reserved,
+        'exclude_unspecified': args.exclude_unspecified,
+    }
+
+    processor = IPCIDRProcessor()
+    content_parts = []
+    for file_path in args.inputs:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as handle:
+            content_parts.append(handle.read())
+    report = processor.build_processing_report(
+        '\n'.join(content_parts),
+        include_ipv4=include_ipv4,
+        include_ipv6=include_ipv6,
+        extraction_mode=args.mode,
+        filters=filters,
+        optimize=args.optimize,
+        aggressive=args.aggressive,
+        allow_expansion=args.allow_expansion,
+        max_extra_addresses=max(0, args.max_extra_addresses),
+    )
+    output = processor.apply_mask(report['final_cidrs'], args.mask)
+    if args.output:
+        with open(args.output, 'w', encoding='utf-8') as handle:
+            handle.write(output)
+    else:
+        print(output)
+    if args.report:
+        print(processor.format_processing_report(report), file=sys.stderr)
+    return 0
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        sys.exit(run_cli(sys.argv[1:]))
+    if not TKINTER_AVAILABLE:
+        print("tkinter is not installed. Install python3-tk to use the GUI, or pass input files for CLI mode.", file=sys.stderr)
+        sys.exit(1)
     processor = IPCIDRProcessor()
     app = IPCIDRProcessorGUI(processor)
