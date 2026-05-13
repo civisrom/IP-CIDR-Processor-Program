@@ -19,9 +19,17 @@ from urllib.parse import urlparse
 # Try to import tkinterdnd2 for drag and drop support
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
+    try:
+        from tkinterdnd2 import DND_TEXT
+    except ImportError:
+        DND_TEXT = DND_FILES
     TKDND_AVAILABLE = True
 except ImportError:
     TKDND_AVAILABLE = False
+    DND_TEXT = None
+
+
+SUPPORTED_DROP_EXTENSIONS = ('.txt', '.log', '.dat', '.csv')
 
 
 class IPCIDRProcessor:
@@ -292,16 +300,39 @@ class IPCIDRProcessor:
 
         results = []
         seen = set()
-        token_pattern = re.compile(r'(?<![0-9A-Fa-f:.])([0-9A-Fa-f:.]+(?:/\d{1,3})?)(?![0-9A-Fa-f:.])')
+        candidates = []
+        claimed_spans = []
 
-        for match in token_pattern.finditer(text):
-            token = match.group(1).strip()
-            if '.' not in token and ':' not in token:
-                continue
+        def spans_overlap(first: Tuple[int, int], second: Tuple[int, int]) -> bool:
+            return max(first[0], second[0]) < min(first[1], second[1])
+
+        def add_token(token: str, span: Tuple[int, int]) -> None:
             normalized = self._normalize_ip_token(token, include_ipv4, include_ipv6)
             if normalized and normalized not in seen:
                 seen.add(normalized)
                 results.append(normalized)
+                claimed_spans.append(span)
+
+        if include_ipv4:
+            octet = r'(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)'
+            ipv4_pattern = re.compile(
+                rf'(?<![A-Za-z0-9_.-])({octet}(?:\.{octet}){{3}}(?:/\d{{1,2}})?)(?![A-Za-z0-9_.-])'
+            )
+            for match in ipv4_pattern.finditer(text):
+                candidates.append((match.start(1), match.end(1), 1, match.group(1)))
+
+        if include_ipv6:
+            ipv6_pattern = re.compile(
+                r'(?<![A-Za-z0-9:.])([0-9A-Fa-f:.]*:[0-9A-Fa-f:.]+(?:/\d{1,3})?)(?![A-Za-z0-9:.])'
+            )
+            for match in ipv6_pattern.finditer(text):
+                candidates.append((match.start(1), match.end(1), 0, match.group(1)))
+
+        for start, end, _, token in sorted(candidates, key=lambda item: (item[0], item[2], -(item[1] - item[0]))):
+            span = (start, end)
+            if any(spans_overlap(span, claimed) for claimed in claimed_spans):
+                continue
+            add_token(token, span)
 
         return results
 
@@ -745,7 +776,8 @@ class IPCIDRProcessorGUI:
         """
         if TKDND_AVAILABLE:
             # Use tkinterdnd2 for proper drag and drop support
-            listbox.drop_target_register(DND_FILES)
+            drop_type = DND_TEXT if listbox_type == "urls" else DND_FILES
+            listbox.drop_target_register(drop_type)
             listbox.dnd_bind('<<Drop>>', lambda e: self._on_drop(e, listbox, listbox_type))
 
             # Add visual feedback
@@ -775,33 +807,36 @@ class IPCIDRProcessorGUI:
         # Reset background color
         listbox.config(bg='white')
 
-        # Get dropped files
-        files = self.root.tk.splitlist(event.data)
+        # Get dropped files or text tokens. splitlist handles Tk's brace-quoted paths.
+        dropped_items = self.root.tk.splitlist(event.data)
 
         if listbox_type == "files":
             # Add files to listbox
-            for file in files:
+            for file in dropped_items:
                 file = file.strip('{}')  # Remove curly braces if present
-                if os.path.isfile(file) and file not in listbox.get(0, tk.END):
+                if os.path.isfile(file) and self._is_supported_drop_file(file) and file not in listbox.get(0, tk.END):
                     listbox.insert(tk.END, file)
                 elif os.path.isdir(file):
                     # If it's a directory, add all text files from it
                     for root, dirs, filenames in os.walk(file):
                         for filename in filenames:
-                            if filename.endswith(('.txt', '.log', '.dat', '.csv')):
+                            if self._is_supported_drop_file(filename):
                                 filepath = os.path.join(root, filename)
                                 if filepath not in listbox.get(0, tk.END):
                                     listbox.insert(tk.END, filepath)
         elif listbox_type == "urls":
             # For URL listbox, treat dropped text as URLs
-            for item in files:
+            for item in dropped_items:
                 item = item.strip('{}')
-                # Check if it looks like a URL
-                if item.startswith(('http://', 'https://', 'ftp://')):
+                if self.validate_url(item):
                     if item not in listbox.get(0, tk.END):
                         listbox.insert(tk.END, item)
 
         return event.action
+
+    def _is_supported_drop_file(self, file_path: str) -> bool:
+        """Return True when a dropped file has a supported text-list extension."""
+        return file_path.lower().endswith(SUPPORTED_DROP_EXTENSIONS)
 
     def add_ip_version_options(self):
         """Add IPv4 and IPv6 support options to relevant tabs."""
