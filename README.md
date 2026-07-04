@@ -60,7 +60,7 @@ python src/ip_cidr_processor.py
 
 Поддерживается перетаскивание:
 
-- файлов `.txt`, `.log`, `.dat`, `.csv`;
+- файлов `.txt`, `.log`, `.dat`, `.csv`, `.json`, `.yaml`, `.yml`;
 - папок, из которых автоматически добавляются поддерживаемые файлы;
 - HTTP/HTTPS URL во вкладку URL Processing.
 

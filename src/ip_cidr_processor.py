@@ -61,7 +61,7 @@ except ImportError:
     DND_TEXT = None
 
 
-SUPPORTED_DROP_EXTENSIONS = ('.txt', '.log', '.dat', '.csv')
+SUPPORTED_DROP_EXTENSIONS = ('.txt', '.log', '.dat', '.csv', '.json', '.yaml', '.yml')
 EXTRACTION_MODES = ('smart', 'strict')
 FILTER_DEFAULTS = {
     'public_only': False,
@@ -329,10 +329,43 @@ class IPCIDRProcessor:
     def extract_ips(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True,
                     extraction_mode: str = 'smart') -> List[str]:
         """Extract IPv4 and/or IPv6 addresses and CIDR notations from text based on settings."""
+        named_prefixes = self._extract_named_prefix_tokens(text, include_ipv4, include_ipv6)
+        if named_prefixes:
+            return named_prefixes
+
         text_without_ranges = self._remove_range_spans(text, include_ipv4, include_ipv6)
         if extraction_mode == 'strict':
             return self._extract_strict_valid_ip_tokens(text_without_ranges, include_ipv4, include_ipv6)
         return self._extract_valid_ip_tokens(text_without_ranges, include_ipv4, include_ipv6)
+
+    def _extract_named_prefix_tokens(self, text: str, include_ipv4: bool = True,
+                                     include_ipv6: bool = True) -> List[str]:
+        """Prefer explicit JSON prefix fields over unrelated IP values in the same document."""
+        if not text or (not include_ipv4 and not include_ipv6):
+            return []
+
+        key_names = []
+        if include_ipv4:
+            key_names.append('ipv4Prefix')
+        if include_ipv6:
+            key_names.append('ipv6Prefix')
+        if not key_names:
+            return []
+
+        key_pattern = '|'.join(re.escape(key) for key in key_names)
+        prefix_pattern = re.compile(
+            rf'["\'](?:{key_pattern})["\']\s*:\s*["\']([^"\']+)["\']',
+            re.IGNORECASE,
+        )
+        prefixes = []
+        seen = set()
+        for match in prefix_pattern.finditer(text):
+            token = match.group(1).strip()
+            normalized = self._normalize_ip_token(token, include_ipv4, include_ipv6)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                prefixes.append(normalized)
+        return prefixes
     
     def extract_ip_ranges(self, text: str, include_ipv4: bool = True, include_ipv6: bool = True) -> List[str]:
         """Extract IPv4 and/or IPv6 ranges from text based on settings."""
@@ -487,7 +520,13 @@ class IPCIDRProcessor:
                 if self._normalize_ip_token(token, include_ipv4=False, include_ipv6=True) is None:
                     add(token, 'Invalid IPv6 CIDR')
 
-        range_like = re.compile(r'(?<![0-9A-Fa-f:.])([0-9A-Fa-f:.]+)\s*-\s*([0-9A-Fa-f:.]+)(?![0-9A-Fa-f:.])')
+        range_like = re.compile(
+            r'(?<![0-9A-Fa-f:.])'
+            r'((?:\d{1,3}(?:\.\d{1,3}){3})|(?:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]+))'
+            r'\s*-\s*'
+            r'((?:\d{1,3}(?:\.\d{1,3}){3})|(?:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]+))'
+            r'(?![0-9A-Fa-f:.])'
+        )
         for match in range_like.finditer(text):
             start_token, end_token = match.group(1), match.group(2)
             try:
@@ -601,22 +640,22 @@ class IPCIDRProcessor:
                 if '/' in ip:
                     try:
                         network = ipaddress.IPv4Network(ip, strict=False)
-                        ipv4_entries.append((ip, int(network.network_address)))
+                        ipv4_entries.append((str(network), int(network.network_address), -network.prefixlen))
                     except ValueError:
                         network = ipaddress.IPv6Network(ip, strict=False)
-                        ipv6_entries.append((ip, int(network.network_address)))
+                        ipv6_entries.append((str(network), int(network.network_address), -network.prefixlen))
                 else:
                     try:
                         address = ipaddress.IPv4Address(ip)
-                        ipv4_entries.append((f"{ip}/32", int(address)))
+                        ipv4_entries.append((f"{ip}/32", int(address), -32))
                     except ValueError:
                         address = ipaddress.IPv6Address(ip)
-                        ipv6_entries.append((f"{ip}/128", int(address)))
+                        ipv6_entries.append((f"{ip}/128", int(address), -128))
             except ValueError:
                 continue
-        ipv4_entries.sort(key=lambda x: x[1])
-        ipv6_entries.sort(key=lambda x: x[1])
-        return [ip for ip, _ in ipv4_entries] + [ip for ip, _ in ipv6_entries]
+        ipv4_entries.sort(key=lambda x: (x[1], x[2]))
+        ipv6_entries.sort(key=lambda x: (x[1], x[2]))
+        return [ip for ip, _, _ in ipv4_entries] + [ip for ip, _, _ in ipv6_entries]
 
     def range_to_cidrs(self, start_ip: str, end_ip: str) -> List[str]:
         """Convert an IP range to a list of CIDR notations."""
@@ -838,7 +877,8 @@ class IPCIDRProcessor:
                              filters: Optional[Dict[str, bool]] = None) -> List[str]:
         """Process input text to extract IPs, CIDR notations, and ranges."""
         cidrs = self.extract_ips(input_text, include_ipv4, include_ipv6, extraction_mode)
-        ranges = self.extract_ip_ranges(input_text, include_ipv4, include_ipv6)
+        has_named_prefixes = bool(self._extract_named_prefix_tokens(input_text, include_ipv4, include_ipv6))
+        ranges = [] if has_named_prefixes else self.extract_ip_ranges(input_text, include_ipv4, include_ipv6)
         
         all_ips = []
         for cidr in cidrs:
@@ -870,7 +910,8 @@ class IPCIDRProcessor:
         """Extract, filter, optionally optimize, and return output plus stats."""
         extraction_mode = extraction_mode if extraction_mode in EXTRACTION_MODES else 'smart'
         cidrs = self.extract_ips(input_text, include_ipv4, include_ipv6, extraction_mode)
-        ranges = self.extract_ip_ranges(input_text, include_ipv4, include_ipv6)
+        has_named_prefixes = bool(self._extract_named_prefix_tokens(input_text, include_ipv4, include_ipv6))
+        ranges = [] if has_named_prefixes else self.extract_ip_ranges(input_text, include_ipv4, include_ipv6)
         extracted = []
 
         for cidr in cidrs:
@@ -990,6 +1031,30 @@ class IPCIDRProcessor:
               ['192.168.1.1/32', '192.168.1.2/31'])
         check('Safe optimization', self.optimize_cidr_list(['10.0.0.0/25', '10.0.0.128/25']), ['10.0.0.0/24'])
         check('Deny/allow subtract', self.subtract_cidr_lists(['10.0.0.0/24'], ['10.0.0.0/25']), ['10.0.0.128/25'])
+        json_prefix_text = (
+            '{"probe": "10.8.3.1", "prefixes": ['
+            '{"ipv4Prefix": "91.205.157.0/24"},'
+            '{"ipv4Prefix": "91.205.216.0/22"},'
+            '{"ipv4Prefix": "193.107.112.0/22"},'
+            '{"ipv4Prefix": "195.18.16.0/22"}'
+            '], "nextHop": "193.233.231.208"}'
+        )
+        check('JSON ipv4Prefix priority',
+              self.extract_ips(json_prefix_text, include_ipv4=True, include_ipv6=False),
+              ['91.205.157.0/24', '91.205.216.0/22', '193.107.112.0/22', '195.18.16.0/22'])
+        json_prefix_report = self.build_processing_report(
+            json_prefix_text,
+            include_ipv4=True,
+            include_ipv6=False,
+            optimize=False,
+        )
+        check('Keenetic mask from JSON prefixes',
+              self.apply_mask(json_prefix_report['final_cidrs'], 'keenetic-webadmin-udp-41495'),
+              'access-list _WEBADMIN_GigabitEthernet1\n'
+              '    permit udp 91.205.157.0 255.255.255.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+              '    permit udp 91.205.216.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+              '    permit udp 193.107.112.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+              '    permit udp 195.18.16.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495')
 
         lines = []
         ok = True
