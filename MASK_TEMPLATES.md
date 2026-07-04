@@ -110,6 +110,7 @@ Formats for router configurations
 |------|-------------|----------------|
 | **mikrotik** | MikroTik address list | `/ip firewall address-list add list=blocked address=192.168.1.0/24` |
 | **cisco-acl** | Cisco ACL deny | `deny ip 192.168.1.0/24 any` |
+| **keenetic-webadmin-udp-41495** | Keenetic ACL for `_WEBADMIN_GigabitEthernet1` UDP 41495 | `permit udp 192.168.1.0 255.255.255.0 0.0.0.0 0.0.0.0 port eq 41495` |
 
 **Example - MikroTik Script:**
 ```routeros
@@ -118,6 +119,8 @@ Formats for router configurations
 /ip firewall address-list add list=blocked address=10.0.0.0/8
 /ip firewall address-list add list=blocked address=172.16.0.0/12
 ```
+
+Template masks can use placeholders such as `{original}`, `{cidr}`, `{network}`, `{netmask}`, `{hostmask}`, `{wildcard}`, `{prefixlen}`, and `{broadcast}`. They also support optional `header` and `footer` values in `ip_cidr_config.yaml`.
 
 ### 📁 DNS
 Formats for DNS and ad-blocking

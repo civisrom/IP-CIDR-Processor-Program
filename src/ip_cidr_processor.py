@@ -15,6 +15,13 @@ import requests
 from typing import List, Dict, Set, Union, Tuple, Optional
 from urllib.parse import urlparse
 
+
+class SafeFormatDict(dict):
+    """Keep unknown template placeholders visible instead of failing formatting."""
+    def __missing__(self, key):
+        return '{' + key + '}'
+
+
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -110,6 +117,17 @@ class IPCIDRProcessor:
                 # Router formats
                 {'name': 'mikrotik', 'category': 'Router', 'prefix': '/ip firewall address-list add list=blocked address=', 'suffix': '', 'separator': '\n', 'description': 'MikroTik address list'},
                 {'name': 'cisco-acl', 'category': 'Router', 'prefix': 'deny ip ', 'suffix': ' any', 'separator': '\n', 'description': 'Cisco ACL deny'},
+                {
+                    'name': 'keenetic-webadmin-udp-41495',
+                    'category': 'Router',
+                    'prefix': '',
+                    'suffix': '',
+                    'separator': '\n',
+                    'header': 'access-list _WEBADMIN_GigabitEthernet1',
+                    'line_template': '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495',
+                    'ip_version': 4,
+                    'description': 'Keenetic ACL for _WEBADMIN_GigabitEthernet1 UDP port 41495'
+                },
 
                 # DNS/AdBlock formats
                 {'name': 'hosts', 'category': 'DNS', 'prefix': '0.0.0.0 ', 'suffix': '', 'separator': '\n', 'description': 'Hosts file format'},
@@ -162,16 +180,23 @@ class IPCIDRProcessor:
                 if not name or name in seen_names:
                     continue
                 seen_names.add(name)
-                valid_masks.append({
+                normalized_mask = {
                     'name': name,
                     'prefix': str(mask.get('prefix', '')),
                     'suffix': str(mask.get('suffix', '')),
                     'separator': str(mask.get('separator', '\n')),
                     'category': str(mask.get('category', 'Custom')),
                     'description': str(mask.get('description', ''))
-                })
+                }
+                for optional_key in ('line_template', 'header', 'footer'):
+                    if optional_key in mask and mask.get(optional_key) is not None:
+                        normalized_mask[optional_key] = str(mask.get(optional_key, ''))
+                if mask.get('ip_version') in (4, 6, '4', '6'):
+                    normalized_mask['ip_version'] = int(mask['ip_version'])
+                valid_masks.append(normalized_mask)
 
         if valid_masks:
+            self._append_default_mask_if_missing(valid_masks, seen_names, 'keenetic-webadmin-udp-41495')
             normalized['masks'] = valid_masks
 
         mask_names = {mask['name'] for mask in normalized['masks']}
@@ -185,6 +210,15 @@ class IPCIDRProcessor:
 
         return normalized
 
+    def _append_default_mask_if_missing(self, masks: List[Dict], seen_names: Set[str], name: str) -> None:
+        """Append a new built-in mask to existing configs without replacing user masks."""
+        if name in seen_names:
+            return
+        default_mask = next((mask for mask in self.default_config['masks'] if mask['name'] == name), None)
+        if default_mask:
+            masks.append(copy.deepcopy(default_mask))
+            seen_names.add(name)
+
     def save_config(self) -> bool:
         """Save current configuration to file."""
         try:
@@ -196,7 +230,9 @@ class IPCIDRProcessor:
             return False
 
     def add_mask(self, name: str, prefix: str, suffix: str, separator: str,
-                 category: str = 'Custom', description: str = '') -> bool:
+                 category: str = 'Custom', description: str = '',
+                 line_template: str = '', header: str = '', footer: str = '',
+                 ip_version: Optional[int] = None) -> bool:
         """Add or update a mask in the configuration."""
         if not name:
             return False
@@ -209,6 +245,14 @@ class IPCIDRProcessor:
             'category': category,
             'description': description
         }
+        if line_template:
+            new_mask['line_template'] = line_template
+        if header:
+            new_mask['header'] = header
+        if footer:
+            new_mask['footer'] = footer
+        if ip_version in (4, 6):
+            new_mask['ip_version'] = ip_version
         for i, mask in enumerate(self.config['masks']):
             if mask['name'] == name:
                 self.config['masks'][i] = new_mask
@@ -276,6 +320,9 @@ class IPCIDRProcessor:
             'category': 'Custom',  # User duplicates go to Custom category
             'description': f"Copy of {original_name}"
         }
+        for optional_key in ('line_template', 'header', 'footer', 'ip_version'):
+            if optional_key in original:
+                new_mask[optional_key] = original[optional_key]
         self.config['masks'].append(new_mask)
         return self.save_config()
 
@@ -706,12 +753,85 @@ class IPCIDRProcessor:
     def apply_mask(self, ips: List[str], mask_name: str) -> str:
         """Apply a mask to format a list of IP addresses."""
         mask = self.get_mask_by_name(mask_name)
-        
+
         formatted_ips = []
         for ip in ips:
-            formatted_ips.append(f"{mask['prefix']}{ip}{mask['suffix']}")
-            
-        return mask['separator'].join(formatted_ips)
+            fields = self._mask_template_fields(ip)
+            ip_version = mask.get('ip_version')
+            if ip_version in (4, 6) and fields.get('version') != ip_version:
+                continue
+            formatted_ips.append(self._format_mask_entry(mask, fields))
+
+        separator = mask.get('separator', '\n')
+        result_parts = []
+        common_fields = SafeFormatDict({
+            'count': len(formatted_ips),
+            'separator': separator,
+            'mask_name': mask.get('name', mask_name),
+        })
+        if not formatted_ips:
+            return ''
+
+        header = mask.get('header', '')
+        if header:
+            result_parts.append(self._render_template(header, common_fields))
+        if formatted_ips:
+            result_parts.append(separator.join(formatted_ips))
+        footer = mask.get('footer', '')
+        if footer:
+            result_parts.append(self._render_template(footer, common_fields))
+        return separator.join(result_parts)
+
+    def _format_mask_entry(self, mask: Dict, fields: SafeFormatDict) -> str:
+        """Format one network using either a template mask or prefix/suffix mask."""
+        line_template = mask.get('line_template')
+        if line_template:
+            return self._render_template(line_template, fields)
+        return f"{mask.get('prefix', '')}{fields['original']}{mask.get('suffix', '')}"
+
+    def _render_template(self, template: str, fields: SafeFormatDict) -> str:
+        """Render a mask template while preserving unknown placeholders."""
+        try:
+            return template.format_map(fields)
+        except (ValueError, KeyError, IndexError):
+            return template
+
+    def _mask_template_fields(self, ip: str) -> SafeFormatDict:
+        """Build placeholder values for template-based masks."""
+        fields = SafeFormatDict({
+            'original': ip,
+            'cidr': ip,
+            'network': ip,
+            'ip': ip,
+            'address': ip,
+            'netmask': '',
+            'hostmask': '',
+            'wildcard': '',
+            'prefixlen': '',
+            'version': None,
+            'broadcast': '',
+            'num_addresses': '',
+        })
+        try:
+            network = ipaddress.ip_network(ip, strict=False)
+        except ValueError:
+            return fields
+
+        fields.update({
+            'cidr': str(network),
+            'network': str(network.network_address),
+            'ip': str(network.network_address),
+            'address': str(network.network_address),
+            'netmask': str(network.netmask),
+            'hostmask': str(network.hostmask),
+            'wildcard': str(network.hostmask),
+            'prefixlen': network.prefixlen,
+            'version': network.version,
+            'num_addresses': network.num_addresses,
+        })
+        if network.version == 4:
+            fields['broadcast'] = str(network.broadcast_address)
+        return fields
 
     def process_input_to_ips(self, input_text: str, include_ipv4: bool = True, include_ipv6: bool = True,
                              extraction_mode: str = 'smart',
@@ -2828,7 +2948,13 @@ class IPCIDRProcessorGUI:
                 return
             if new_name != name:
                 self.processor.remove_mask(name)
-            if self.processor.add_mask(new_name, new_prefix, new_suffix, new_separator, new_category, new_description):
+            if self.processor.add_mask(
+                new_name, new_prefix, new_suffix, new_separator, new_category, new_description,
+                line_template=mask.get('line_template', ''),
+                header=mask.get('header', ''),
+                footer=mask.get('footer', ''),
+                ip_version=mask.get('ip_version'),
+            ):
                 dialog.destroy()
                 self.update_mask_display(self.mask_frame)
                 self.refresh_mask_comboboxes()
@@ -2851,11 +2977,16 @@ class IPCIDRProcessorGUI:
         sample_ips = ['192.168.1.0/24', '10.0.0.0/8', '172.16.0.0/12']
 
         # Apply mask
-        formatted = []
-        for ip in sample_ips:
-            formatted.append(f"{prefix}{ip}{suffix}")
-
-        result = separator.join(formatted)
+        temp_mask = {
+            'name': '__preview__',
+            'prefix': prefix,
+            'suffix': suffix,
+            'separator': separator,
+        }
+        result = separator.join(
+            self.processor._format_mask_entry(temp_mask, self.processor._mask_template_fields(ip))
+            for ip in sample_ips
+        )
 
         # Show preview dialog
         preview_dialog = tk.Toplevel(self.root)
@@ -2886,9 +3017,6 @@ class IPCIDRProcessorGUI:
 
     def preview_existing_mask(self, mask):
         """Preview an existing mask with sample IPs."""
-        prefix = mask.get('prefix', '')
-        suffix = mask.get('suffix', '')
-        separator = mask.get('separator', '\n')
         name = mask.get('name', 'Unknown')
         description = mask.get('description', '')
 
@@ -2896,11 +3024,7 @@ class IPCIDRProcessorGUI:
         sample_ips = ['192.168.1.0/24', '10.0.0.0/8', '172.16.0.0/12']
 
         # Apply mask
-        formatted = []
-        for ip in sample_ips:
-            formatted.append(f"{prefix}{ip}{suffix}")
-
-        result = separator.join(formatted)
+        result = self.processor.apply_mask(sample_ips, name)
 
         # Show preview dialog
         preview_dialog = tk.Toplevel(self.root)
