@@ -829,8 +829,9 @@ class IPCIDRProcessor:
         return ipaddress.ip_network((network_int, prefixlen))
 
     def _lossy_expand_networks(self, networks, max_extra_addresses: int):
-        """Merge nearby networks when the added address count stays within a limit."""
+        """Merge nearby networks when the total added address count stays within a limit."""
         current = list(ipaddress.collapse_addresses(networks))
+        original_total = sum(network.num_addresses for network in current)
         changed = True
         while changed:
             changed = False
@@ -846,16 +847,15 @@ class IPCIDRProcessor:
                     group = [network for network in current if network.subnet_of(common)]
                     if len(group) < 2:
                         continue
-                    covered = self.cidr_total_addresses([str(network) for network in group])
-                    extra = common.num_addresses - covered
+                    proposed = [network for network in current if network not in group]
+                    proposed.append(common)
+                    proposed = list(ipaddress.collapse_addresses(proposed))
+                    extra = sum(network.num_addresses for network in proposed) - original_total
                     if 0 <= extra <= max_extra_addresses:
-                        best = (common, group)
+                        best = proposed
                         break
                 if best:
-                    common, group = best
-                    current = [network for network in current if network not in group]
-                    current.append(common)
-                    current = list(ipaddress.collapse_addresses(current))
+                    current = best
                     changed = True
                     break
         return current

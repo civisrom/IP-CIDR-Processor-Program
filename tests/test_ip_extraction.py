@@ -192,6 +192,88 @@ class IPExtractionTests(ProcessorTestCase):
             '    deny tcp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 9443',
         )
 
+    def test_standard_optimization_preserves_exact_coverage(self):
+        cidrs = [
+            '10.0.0.0/25',
+            '10.0.0.128/25',
+            '10.0.0.64/26',
+            '2001:db8::/127',
+            '2001:db8::2/127',
+        ]
+
+        result = self.processor.optimize_cidr_list(cidrs)
+
+        self.assertEqual(result, ['10.0.0.0/24', '2001:db8::/126'])
+        self.assertEqual(
+            self.processor.cidr_total_addresses(result),
+            self.processor.cidr_total_addresses(cidrs),
+        )
+
+    def test_standard_optimization_does_not_fill_gaps(self):
+        cidrs = ['10.0.0.0/27', '10.0.0.64/27']
+
+        self.assertEqual(
+            self.processor.optimize_cidr_list(cidrs),
+            ['10.0.0.0/27', '10.0.0.64/27'],
+        )
+
+    def test_aggressive_without_expansion_matches_standard_mode(self):
+        cidrs = ['10.0.0.0/27', '10.0.0.64/27']
+
+        self.assertEqual(
+            self.processor.optimize_cidr_list(
+                cidrs,
+                aggressive=True,
+                allow_expansion=False,
+                max_extra_addresses=64,
+            ),
+            self.processor.optimize_cidr_list(cidrs),
+        )
+
+    def test_aggressive_expansion_respects_global_extra_limit(self):
+        cidrs = ['10.0.0.0/27', '10.0.0.64/27', '10.0.0.128/27', '10.0.0.192/27']
+
+        result = self.processor.optimize_cidr_list(
+            cidrs,
+            aggressive=True,
+            allow_expansion=True,
+            max_extra_addresses=64,
+        )
+        safe_total = self.processor.cidr_total_addresses(self.processor.optimize_cidr_list(cidrs))
+        result_total = self.processor.cidr_total_addresses(result)
+
+        self.assertEqual(result, ['10.0.0.0/25', '10.0.0.128/27', '10.0.0.192/27'])
+        self.assertLessEqual(result_total - safe_total, 64)
+
+    def test_aggressive_expansion_can_use_larger_global_limit(self):
+        cidrs = ['10.0.0.0/27', '10.0.0.64/27', '10.0.0.128/27', '10.0.0.192/27']
+
+        result = self.processor.optimize_cidr_list(
+            cidrs,
+            aggressive=True,
+            allow_expansion=True,
+            max_extra_addresses=128,
+        )
+
+        self.assertEqual(result, ['10.0.0.0/24'])
+        self.assertEqual(
+            self.processor.cidr_total_addresses(result)
+            - self.processor.cidr_total_addresses(self.processor.optimize_cidr_list(cidrs)),
+            128,
+        )
+
+    def test_aggressive_processing_report_extra_addresses_respects_limit(self):
+        report = self.processor.build_processing_report(
+            '10.0.0.0/27\n10.0.0.64/27\n10.0.0.128/27\n10.0.0.192/27',
+            optimize=True,
+            aggressive=True,
+            allow_expansion=True,
+            max_extra_addresses=64,
+        )
+
+        self.assertEqual(report['final_cidrs'], ['10.0.0.0/25', '10.0.0.128/27', '10.0.0.192/27'])
+        self.assertEqual(report['stats']['extra_addresses'], 64)
+
 
 if __name__ == '__main__':
     unittest.main()
