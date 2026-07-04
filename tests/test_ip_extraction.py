@@ -49,9 +49,14 @@ class IPExtractionTests(ProcessorTestCase):
             self.processor.apply_mask(report['final_cidrs'], 'keenetic-webadmin-udp-41495'),
             'access-list _WEBADMIN_GigabitEthernet1\n'
             '    permit udp 91.205.157.0 255.255.255.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+            '    permit description winmobile\n'
             '    permit udp 91.205.216.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+            '    permit description winmobile\n'
             '    permit udp 193.107.112.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495\n'
-            '    permit udp 195.18.16.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495',
+            '    permit description winmobile\n'
+            '    permit udp 195.18.16.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+            '    permit description winmobile\n'
+            '    deny udp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 443',
         )
 
     def test_smart_extraction_from_garbage_text(self):
@@ -88,6 +93,104 @@ class IPExtractionTests(ProcessorTestCase):
     def test_json_files_are_supported_for_drag_and_drop(self):
         self.assertIn('.json', SUPPORTED_DROP_EXTENSIONS)
         self.assertIn('.yaml', SUPPORTED_DROP_EXTENSIONS)
+
+    def test_old_keenetic_mask_config_is_upgraded(self):
+        old_config = {
+            'masks': [
+                {'name': 'default', 'prefix': '', 'suffix': '', 'separator': '\n'},
+                {
+                    'name': 'keenetic-webadmin-udp-41495',
+                    'category': 'Router',
+                    'prefix': '',
+                    'suffix': '',
+                    'separator': '\n',
+                    'header': 'access-list _WEBADMIN_GigabitEthernet1',
+                    'line_template': '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495',
+                    'ip_version': 4,
+                },
+            ],
+            'default_mask': 'default',
+        }
+
+        normalized = self.processor._normalize_config(old_config)
+        keenetic = next(mask for mask in normalized['masks'] if mask['name'] == 'keenetic-webadmin-udp-41495')
+
+        self.assertEqual(
+            keenetic['line_template'],
+            '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495\n'
+            '    permit description winmobile',
+        )
+        self.assertEqual(
+            keenetic['footer'],
+            '    deny udp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 443',
+        )
+
+    def test_interrupted_keenetic_example_template_is_upgraded(self):
+        old_config = {
+            'masks': [
+                {'name': 'default', 'prefix': '', 'suffix': '', 'separator': '\n'},
+                {
+                    'name': 'keenetic-webadmin-udp-41495',
+                    'category': 'Router',
+                    'prefix': '',
+                    'suffix': '',
+                    'separator': '\n',
+                    'header': 'access-list _WEBADMIN_GigabitEthernet1',
+                    'line_template': (
+                        '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495\n'
+                        '    permit description example'
+                    ),
+                    'footer': '    deny udp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 443',
+                    'ip_version': 4,
+                },
+            ],
+            'default_mask': 'default',
+        }
+
+        normalized = self.processor._normalize_config(old_config)
+        keenetic = next(mask for mask in normalized['masks'] if mask['name'] == 'keenetic-webadmin-udp-41495')
+
+        self.assertEqual(
+            keenetic['line_template'],
+            '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495\n'
+            '    permit description winmobile',
+        )
+        self.assertEqual(
+            keenetic['footer'],
+            '    deny udp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 443',
+        )
+
+    def test_mask_template_variables_allow_firewall_ports_and_description(self):
+        added = self.processor.add_mask(
+            'keenetic-custom-firewall',
+            '',
+            '',
+            '\n',
+            'Router',
+            'Custom Keenetic firewall rule',
+            line_template=(
+                '    permit {protocol} {network} {netmask} 0.0.0.0 0.0.0.0 port eq {permit_port}\n'
+                '    permit description {rule_description}'
+            ),
+            header='access-list _WEBADMIN_GigabitEthernet1',
+            footer='    deny {protocol} 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq {deny_port}',
+            ip_version=4,
+            variables={
+                'protocol': 'tcp',
+                'permit_port': '8443',
+                'deny_port': '9443',
+                'rule_description': 'office-admin',
+            },
+        )
+
+        self.assertTrue(added)
+        self.assertEqual(
+            self.processor.apply_mask(['203.0.113.0/24'], 'keenetic-custom-firewall'),
+            'access-list _WEBADMIN_GigabitEthernet1\n'
+            '    permit tcp 203.0.113.0 255.255.255.0 0.0.0.0 0.0.0.0 port eq 8443\n'
+            '    permit description office-admin\n'
+            '    deny tcp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 9443',
+        )
 
 
 if __name__ == '__main__':

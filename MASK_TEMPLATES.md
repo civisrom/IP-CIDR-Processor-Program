@@ -110,7 +110,7 @@ Formats for router configurations
 |------|-------------|----------------|
 | **mikrotik** | MikroTik address list | `/ip firewall address-list add list=blocked address=192.168.1.0/24` |
 | **cisco-acl** | Cisco ACL deny | `deny ip 192.168.1.0/24 any` |
-| **keenetic-webadmin-udp-41495** | Keenetic ACL for `_WEBADMIN_GigabitEthernet1` UDP 41495 | `permit udp 192.168.1.0 255.255.255.0 0.0.0.0 0.0.0.0 port eq 41495` |
+| **keenetic-webadmin-udp-41495** | Keenetic ACL for `_WEBADMIN_GigabitEthernet1` UDP 41495 with `permit description winmobile` and final UDP 443 deny | `permit udp 192.168.1.0 255.255.255.0 0.0.0.0 0.0.0.0 port eq 41495` |
 
 **Example - MikroTik Script:**
 ```routeros
@@ -120,7 +120,9 @@ Formats for router configurations
 /ip firewall address-list add list=blocked address=172.16.0.0/12
 ```
 
-Template masks can use placeholders such as `{original}`, `{cidr}`, `{network}`, `{netmask}`, `{hostmask}`, `{wildcard}`, `{prefixlen}`, and `{broadcast}`. They also support optional `header` and `footer` values in `ip_cidr_config.yaml`.
+Template masks can use placeholders such as `{original}`, `{cidr}`, `{network}`, `{netmask}`, `{hostmask}`, `{wildcard}`, `{prefixlen}`, and `{broadcast}`. They also support optional `header`, `line_template`, `footer`, `ip_version`, and `key=value` template variables in `ip_cidr_config.yaml` and in Mask Settings.
+
+For Keenetic ACL output, set `Header` to `access-list _WEBADMIN_GigabitEthernet1`, `Line Template` to `permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495\npermit description winmobile`, and `Footer` to `deny udp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 443`. Use leading spaces in these fields when your router configuration requires indentation.
 
 ### 📁 DNS
 Formats for DNS and ad-blocking

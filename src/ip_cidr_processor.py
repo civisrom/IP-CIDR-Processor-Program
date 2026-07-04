@@ -124,9 +124,10 @@ class IPCIDRProcessor:
                     'suffix': '',
                     'separator': '\n',
                     'header': 'access-list _WEBADMIN_GigabitEthernet1',
-                    'line_template': '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495',
+                    'line_template': '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495\n    permit description winmobile',
+                    'footer': '    deny udp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 443',
                     'ip_version': 4,
-                    'description': 'Keenetic ACL for _WEBADMIN_GigabitEthernet1 UDP port 41495'
+                    'description': 'Keenetic ACL for _WEBADMIN_GigabitEthernet1 UDP 41495 with winmobile description and UDP 443 deny'
                 },
 
                 # DNS/AdBlock formats
@@ -191,8 +192,12 @@ class IPCIDRProcessor:
                 for optional_key in ('line_template', 'header', 'footer'):
                     if optional_key in mask and mask.get(optional_key) is not None:
                         normalized_mask[optional_key] = str(mask.get(optional_key, ''))
+                variables = self._normalize_mask_variables(mask.get('variables'))
+                if variables:
+                    normalized_mask['variables'] = variables
                 if mask.get('ip_version') in (4, 6, '4', '6'):
                     normalized_mask['ip_version'] = int(mask['ip_version'])
+                self._upgrade_builtin_mask(normalized_mask)
                 valid_masks.append(normalized_mask)
 
         if valid_masks:
@@ -219,6 +224,68 @@ class IPCIDRProcessor:
             masks.append(copy.deepcopy(default_mask))
             seen_names.add(name)
 
+    def _normalize_mask_variables(self, variables: Optional[Dict]) -> Dict[str, str]:
+        """Return safe string template variables for mask formatting."""
+        if not isinstance(variables, dict):
+            return {}
+        normalized = {}
+        for key, value in variables.items():
+            key = str(key).strip()
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key):
+                continue
+            normalized[key] = str(value)
+        return normalized
+
+    def parse_mask_variables_text(self, text: str) -> Dict[str, str]:
+        """Parse key=value mask variables from GUI text."""
+        variables = {}
+        for chunk in re.split(r'[\n,;]+', text or ''):
+            if '=' not in chunk:
+                continue
+            key, value = chunk.split('=', 1)
+            key = key.strip()
+            value = value.strip().replace('\\n', '\n').replace('\\t', '\t')
+            if key:
+                variables[key] = value
+        return self._normalize_mask_variables(variables)
+
+    def format_mask_variables_text(self, variables: Optional[Dict]) -> str:
+        """Format mask variables for GUI editing."""
+        normalized = self._normalize_mask_variables(variables)
+        parts = []
+        for key, value in normalized.items():
+            display_value = value.replace('\n', '\\n').replace('\t', '\\t')
+            parts.append(f"{key}={display_value}")
+        return ', '.join(parts)
+
+    def _upgrade_builtin_mask(self, mask: Dict) -> None:
+        """Bring older built-in mask definitions forward without touching unrelated custom masks."""
+        if mask.get('name') != 'keenetic-webadmin-udp-41495':
+            return
+
+        default_mask = next((item for item in self.default_config['masks'] if item['name'] == mask['name']), None)
+        if not default_mask:
+            return
+
+        old_line_templates = {
+            '    permit {protocol} {network} {netmask} 0.0.0.0 0.0.0.0 port eq {permit_port}\n    permit description {rule_description}',
+            '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495',
+            '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495\n    permit description example',
+            '    permit udp {network} {netmask} 0.0.0.0 0.0.0.0 port eq 41495\n    permit description winmobile',
+        }
+        if not mask.get('line_template') or mask.get('line_template') in old_line_templates:
+            mask['line_template'] = default_mask['line_template']
+        old_footers = {
+            '    deny {protocol} 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq {deny_port}',
+            '    deny udp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 443',
+        }
+        if not mask.get('footer') or mask.get('footer') in old_footers:
+            mask['footer'] = default_mask['footer']
+        if not mask.get('header'):
+            mask['header'] = default_mask['header']
+        if mask.get('ip_version') not in (4, 6):
+            mask['ip_version'] = default_mask['ip_version']
+
     def save_config(self) -> bool:
         """Save current configuration to file."""
         try:
@@ -232,7 +299,8 @@ class IPCIDRProcessor:
     def add_mask(self, name: str, prefix: str, suffix: str, separator: str,
                  category: str = 'Custom', description: str = '',
                  line_template: str = '', header: str = '', footer: str = '',
-                 ip_version: Optional[int] = None) -> bool:
+                 ip_version: Optional[int] = None,
+                 variables: Optional[Dict[str, str]] = None) -> bool:
         """Add or update a mask in the configuration."""
         if not name:
             return False
@@ -251,6 +319,9 @@ class IPCIDRProcessor:
             new_mask['header'] = header
         if footer:
             new_mask['footer'] = footer
+        normalized_variables = self._normalize_mask_variables(variables)
+        if normalized_variables:
+            new_mask['variables'] = normalized_variables
         if ip_version in (4, 6):
             new_mask['ip_version'] = ip_version
         for i, mask in enumerate(self.config['masks']):
@@ -320,9 +391,9 @@ class IPCIDRProcessor:
             'category': 'Custom',  # User duplicates go to Custom category
             'description': f"Copy of {original_name}"
         }
-        for optional_key in ('line_template', 'header', 'footer', 'ip_version'):
+        for optional_key in ('line_template', 'header', 'footer', 'ip_version', 'variables'):
             if optional_key in original:
-                new_mask[optional_key] = original[optional_key]
+                new_mask[optional_key] = copy.deepcopy(original[optional_key])
         self.config['masks'].append(new_mask)
         return self.save_config()
 
@@ -792,10 +863,15 @@ class IPCIDRProcessor:
     def apply_mask(self, ips: List[str], mask_name: str) -> str:
         """Apply a mask to format a list of IP addresses."""
         mask = self.get_mask_by_name(mask_name)
+        return self.apply_mask_definition(ips, mask, mask_name)
 
+    def apply_mask_definition(self, ips: List[str], mask: Dict, mask_name: str = '') -> str:
+        """Apply a mask dictionary to format a list of IP addresses."""
         formatted_ips = []
+        template_variables = self._normalize_mask_variables(mask.get('variables'))
         for ip in ips:
-            fields = self._mask_template_fields(ip)
+            fields = SafeFormatDict(template_variables)
+            fields.update(self._mask_template_fields(ip))
             ip_version = mask.get('ip_version')
             if ip_version in (4, 6) and fields.get('version') != ip_version:
                 continue
@@ -803,7 +879,8 @@ class IPCIDRProcessor:
 
         separator = mask.get('separator', '\n')
         result_parts = []
-        common_fields = SafeFormatDict({
+        common_fields = SafeFormatDict(template_variables)
+        common_fields.update({
             'count': len(formatted_ips),
             'separator': separator,
             'mask_name': mask.get('name', mask_name),
@@ -1052,9 +1129,14 @@ class IPCIDRProcessor:
               self.apply_mask(json_prefix_report['final_cidrs'], 'keenetic-webadmin-udp-41495'),
               'access-list _WEBADMIN_GigabitEthernet1\n'
               '    permit udp 91.205.157.0 255.255.255.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+              '    permit description winmobile\n'
               '    permit udp 91.205.216.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+              '    permit description winmobile\n'
               '    permit udp 193.107.112.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495\n'
-              '    permit udp 195.18.16.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495')
+              '    permit description winmobile\n'
+              '    permit udp 195.18.16.0 255.255.252.0 0.0.0.0 0.0.0.0 port eq 41495\n'
+              '    permit description winmobile\n'
+              '    deny udp 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 port eq 443')
 
         lines = []
         ok = True
@@ -2041,16 +2123,43 @@ class IPCIDRProcessorGUI:
         self.new_mask_description = tk.StringVar()
         ttk.Entry(new_mask_frame, textvariable=self.new_mask_description, width=30).grid(row=5, column=1, padx=5, pady=5, sticky='w')
 
-        # Row 6: Preview
+        # Row 6: Header
+        ttk.Label(new_mask_frame, text="Header:").grid(row=6, column=0, padx=5, pady=5, sticky='w')
+        self.new_mask_header = tk.StringVar()
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_header, width=70).grid(row=6, column=1, padx=5, pady=5, sticky='ew')
+
+        # Row 7: Line Template
+        ttk.Label(new_mask_frame, text="Line Template:").grid(row=7, column=0, padx=5, pady=5, sticky='w')
+        self.new_mask_line_template = tk.StringVar()
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_line_template, width=70).grid(row=7, column=1, padx=5, pady=5, sticky='ew')
+
+        # Row 8: Footer
+        ttk.Label(new_mask_frame, text="Footer:").grid(row=8, column=0, padx=5, pady=5, sticky='w')
+        self.new_mask_footer = tk.StringVar()
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_footer, width=70).grid(row=8, column=1, padx=5, pady=5, sticky='ew')
+
+        # Row 9: IP Version
+        ttk.Label(new_mask_frame, text="IP Version:").grid(row=9, column=0, padx=5, pady=5, sticky='w')
+        self.new_mask_ip_version = tk.StringVar()
+        ip_version_combo = ttk.Combobox(new_mask_frame, textvariable=self.new_mask_ip_version, values=['', '4', '6'], width=10, state='readonly')
+        ip_version_combo.grid(row=9, column=1, padx=5, pady=5, sticky='w')
+
+        # Row 10: Template Variables
+        ttk.Label(new_mask_frame, text="Template Variables:").grid(row=10, column=0, padx=5, pady=5, sticky='w')
+        self.new_mask_variables = tk.StringVar()
+        ttk.Entry(new_mask_frame, textvariable=self.new_mask_variables, width=70).grid(row=10, column=1, padx=5, pady=5, sticky='ew')
+
+        # Row 11: Preview
         preview_frame = ttk.Frame(new_mask_frame)
-        preview_frame.grid(row=6, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
+        preview_frame.grid(row=11, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
 
         ttk.Button(preview_frame, text="Preview", command=self.preview_mask).pack(side='left', padx=2)
         ttk.Button(preview_frame, text="Add Mask", command=self.add_new_mask).pack(side='left', padx=2)
 
-        # Row 7: Help text
-        help_text = "Note: Use \\n for newline, \\t for tab"
-        ttk.Label(new_mask_frame, text=help_text, font=('Arial', 8), foreground='gray').grid(row=7, column=0, columnspan=2, padx=5, pady=2, sticky='w')
+        # Row 12: Help text
+        help_text = "Note: Use \\n for newline, \\t for tab. Variables: key=value, e.g. protocol=udp, permit_port=41495, deny_port=443, rule_description=client."
+        ttk.Label(new_mask_frame, text=help_text, font=('Arial', 8), foreground='gray').grid(row=12, column=0, columnspan=2, padx=5, pady=2, sticky='w')
+        new_mask_frame.columnconfigure(1, weight=1)
 
     def update_mask_display(self, parent_frame):
         """Update the display of masks in the settings tab with category filtering."""
@@ -2943,12 +3052,21 @@ class IPCIDRProcessorGUI:
         separator = self.new_mask_separator.get().replace('\\n', '\n').replace('\\t', '\t')
         category = self.new_mask_category.get()
         description = self.new_mask_description.get()
+        header = self.new_mask_header.get().replace('\\n', '\n').replace('\\t', '\t')
+        line_template = self.new_mask_line_template.get().replace('\\n', '\n').replace('\\t', '\t')
+        footer = self.new_mask_footer.get().replace('\\n', '\n').replace('\\t', '\t')
+        ip_version = int(self.new_mask_ip_version.get()) if self.new_mask_ip_version.get() in ('4', '6') else None
+        variables = self.processor.parse_mask_variables_text(self.new_mask_variables.get())
 
         if not name:
             messagebox.showwarning("Warning", "Mask name is required.")
             return
 
-        if self.processor.add_mask(name, prefix, suffix, separator, category, description):
+        if self.processor.add_mask(
+            name, prefix, suffix, separator, category, description,
+            line_template=line_template, header=header, footer=footer, ip_version=ip_version,
+            variables=variables,
+        ):
             messagebox.showinfo("Success", f"Mask '{name}' added successfully.")
             self.update_mask_display(self.mask_frame)
             self.refresh_mask_comboboxes()
@@ -2962,13 +3080,18 @@ class IPCIDRProcessorGUI:
             self.new_mask_separator.set("\\n")
             self.new_mask_category.set("Custom")
             self.new_mask_description.set("")
+            self.new_mask_header.set("")
+            self.new_mask_line_template.set("")
+            self.new_mask_footer.set("")
+            self.new_mask_ip_version.set("")
+            self.new_mask_variables.set("")
 
     def edit_mask(self, name):
         """Edit an existing mask."""
         mask = self.processor.get_mask_by_name(name)
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Edit Mask: {name}")
-        dialog.geometry("450x400")
+        dialog.geometry("800x620")
 
         ttk.Label(dialog, text="Name:").grid(row=0, column=0, padx=10, pady=10, sticky='w')
         name_var = tk.StringVar(value=mask['name'])
@@ -2994,9 +3117,31 @@ class IPCIDRProcessorGUI:
 
         ttk.Label(dialog, text="Description:").grid(row=5, column=0, padx=10, pady=10, sticky='w')
         description_var = tk.StringVar(value=mask.get('description', ''))
-        ttk.Entry(dialog, textvariable=description_var, width=30).grid(row=5, column=1, padx=10, pady=10, sticky='w')
+        ttk.Entry(dialog, textvariable=description_var, width=70).grid(row=5, column=1, padx=10, pady=10, sticky='ew')
 
-        ttk.Label(dialog, text="Note: Use \\n for newline, \\t for tab").grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky='w')
+        ttk.Label(dialog, text="Header:").grid(row=6, column=0, padx=10, pady=10, sticky='w')
+        header_var = tk.StringVar(value=mask.get('header', '').replace('\n', '\\n').replace('\t', '\\t'))
+        ttk.Entry(dialog, textvariable=header_var, width=70).grid(row=6, column=1, padx=10, pady=10, sticky='ew')
+
+        ttk.Label(dialog, text="Line Template:").grid(row=7, column=0, padx=10, pady=10, sticky='w')
+        line_template_var = tk.StringVar(value=mask.get('line_template', '').replace('\n', '\\n').replace('\t', '\\t'))
+        ttk.Entry(dialog, textvariable=line_template_var, width=70).grid(row=7, column=1, padx=10, pady=10, sticky='ew')
+
+        ttk.Label(dialog, text="Footer:").grid(row=8, column=0, padx=10, pady=10, sticky='w')
+        footer_var = tk.StringVar(value=mask.get('footer', '').replace('\n', '\\n').replace('\t', '\\t'))
+        ttk.Entry(dialog, textvariable=footer_var, width=70).grid(row=8, column=1, padx=10, pady=10, sticky='ew')
+
+        ttk.Label(dialog, text="IP Version:").grid(row=9, column=0, padx=10, pady=10, sticky='w')
+        ip_version_var = tk.StringVar(value=str(mask.get('ip_version', '')) if mask.get('ip_version') in (4, 6) else '')
+        ip_version_combo = ttk.Combobox(dialog, textvariable=ip_version_var, values=['', '4', '6'], width=10, state='readonly')
+        ip_version_combo.grid(row=9, column=1, padx=10, pady=10, sticky='w')
+
+        ttk.Label(dialog, text="Template Variables:").grid(row=10, column=0, padx=10, pady=10, sticky='w')
+        variables_var = tk.StringVar(value=self.processor.format_mask_variables_text(mask.get('variables')))
+        ttk.Entry(dialog, textvariable=variables_var, width=70).grid(row=10, column=1, padx=10, pady=10, sticky='ew')
+
+        ttk.Label(dialog, text="Note: Variables use key=value, e.g. protocol=udp, permit_port=41495, deny_port=443, rule_description=client.").grid(row=11, column=0, columnspan=2, padx=10, pady=5, sticky='w')
+        dialog.columnconfigure(1, weight=1)
 
         def save_changes():
             new_name = name_var.get().strip()
@@ -3005,6 +3150,11 @@ class IPCIDRProcessorGUI:
             new_separator = separator_var.get().replace('\\n', '\n').replace('\\t', '\t')
             new_category = category_var.get()
             new_description = description_var.get()
+            new_header = header_var.get().replace('\\n', '\n').replace('\\t', '\t')
+            new_line_template = line_template_var.get().replace('\\n', '\n').replace('\\t', '\t')
+            new_footer = footer_var.get().replace('\\n', '\n').replace('\\t', '\t')
+            new_ip_version = int(ip_version_var.get()) if ip_version_var.get() in ('4', '6') else None
+            new_variables = self.processor.parse_mask_variables_text(variables_var.get())
             if not new_name:
                 messagebox.showwarning("Warning", "Mask name is required.")
                 return
@@ -3015,10 +3165,11 @@ class IPCIDRProcessorGUI:
                 self.processor.remove_mask(name)
             if self.processor.add_mask(
                 new_name, new_prefix, new_suffix, new_separator, new_category, new_description,
-                line_template=mask.get('line_template', ''),
-                header=mask.get('header', ''),
-                footer=mask.get('footer', ''),
-                ip_version=mask.get('ip_version'),
+                line_template=new_line_template,
+                header=new_header,
+                footer=new_footer,
+                ip_version=new_ip_version,
+                variables=new_variables,
             ):
                 dialog.destroy()
                 self.update_mask_display(self.mask_frame)
@@ -3027,7 +3178,7 @@ class IPCIDRProcessorGUI:
                 if hasattr(self, 'mask_category_combo'):
                     self.mask_category_combo['values'] = ['All'] + self.processor.get_mask_categories()
 
-        ttk.Button(dialog, text="Save Changes", command=save_changes).grid(row=7, column=0, columnspan=2, pady=15)
+        ttk.Button(dialog, text="Save Changes", command=save_changes).grid(row=12, column=0, columnspan=2, pady=15)
         dialog.transient(self.root)
         dialog.grab_set()
         self.root.wait_window(dialog)
@@ -3037,6 +3188,11 @@ class IPCIDRProcessorGUI:
         prefix = self.new_mask_prefix.get()
         suffix = self.new_mask_suffix.get()
         separator = self.new_mask_separator.get().replace('\\n', '\n').replace('\\t', '\t')
+        header = self.new_mask_header.get().replace('\\n', '\n').replace('\\t', '\t')
+        line_template = self.new_mask_line_template.get().replace('\\n', '\n').replace('\\t', '\t')
+        footer = self.new_mask_footer.get().replace('\\n', '\n').replace('\\t', '\t')
+        ip_version = int(self.new_mask_ip_version.get()) if self.new_mask_ip_version.get() in ('4', '6') else None
+        variables = self.processor.parse_mask_variables_text(self.new_mask_variables.get())
 
         # Sample IPs for preview
         sample_ips = ['192.168.1.0/24', '10.0.0.0/8', '172.16.0.0/12']
@@ -3048,10 +3204,17 @@ class IPCIDRProcessorGUI:
             'suffix': suffix,
             'separator': separator,
         }
-        result = separator.join(
-            self.processor._format_mask_entry(temp_mask, self.processor._mask_template_fields(ip))
-            for ip in sample_ips
-        )
+        if header:
+            temp_mask['header'] = header
+        if line_template:
+            temp_mask['line_template'] = line_template
+        if footer:
+            temp_mask['footer'] = footer
+        if ip_version in (4, 6):
+            temp_mask['ip_version'] = ip_version
+        if variables:
+            temp_mask['variables'] = variables
+        result = self.processor.apply_mask_definition(sample_ips, temp_mask, '__preview__')
 
         # Show preview dialog
         preview_dialog = tk.Toplevel(self.root)
@@ -3104,6 +3267,9 @@ class IPCIDRProcessorGUI:
         ttk.Label(info_frame, text=f"Category: {mask.get('category', 'Custom')}").pack(padx=5, pady=2, anchor='w')
         if description:
             ttk.Label(info_frame, text=f"Description: {description}", font=('Arial', 8), foreground='gray').pack(padx=5, pady=2, anchor='w')
+        variables_text = self.processor.format_mask_variables_text(mask.get('variables'))
+        if variables_text:
+            ttk.Label(info_frame, text=f"Variables: {variables_text}", font=('Arial', 8), foreground='gray').pack(padx=5, pady=2, anchor='w')
 
         ttk.Label(preview_dialog, text="Preview with sample IPs:", font=('Arial', 10, 'bold')).pack(padx=10, pady=5, anchor='w')
 
